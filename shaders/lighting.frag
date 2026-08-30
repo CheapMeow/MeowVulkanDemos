@@ -91,7 +91,10 @@ void main()
         vec3 lightDirection = toLight / distanceToLight;
         vec3 halfway = normalize(viewDirection + lightDirection);
 
-        float attenuation = 1.0 / (distanceToLight * distanceToLight);
+        // 平方反比衰减配合窗口函数，在影响半径处平滑归零
+        float distanceRatio = distanceToLight / light.positionRange.w;
+        float window = clamp(1.0 - distanceRatio * distanceRatio * distanceRatio * distanceRatio, 0.0, 1.0);
+        float attenuation = (window * window) / (distanceToLight * distanceToLight + 1.0);
         vec3 radiance = light.color.rgb * light.color.a * attenuation;
 
         float normalDistribution = distributionGGX(normal, halfway, roughness);

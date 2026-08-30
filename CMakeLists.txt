@@ -22,7 +22,11 @@ add_executable(VulkanIndirectDrawDemo
     src/vk_context.cpp
     src/vk_resources.cpp
     src/obj_loader.cpp
+    src/scene.cpp
+    src/renderer.cpp
+    src/frame_capture.cpp
     src/stb_image_impl.cpp
+    src/stb_image_write_impl.cpp
 )
 
 set(SHADER_SOURCES

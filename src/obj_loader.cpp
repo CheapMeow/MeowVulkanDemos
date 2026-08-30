@@ -187,11 +187,17 @@ void loadObj(const std::string& path, MeshData& outMesh)
         minCorner = glm::min(minCorner, outMesh.vertices[i].position);
         maxCorner = glm::max(maxCorner, outMesh.vertices[i].position);
     }
-    outMesh.boundsCenter = (minCorner + maxCorner) * 0.5f;
+
+    // 把模型平移到原点，实例位置即包围球中心，剔除判断因此可以直接用实例位置
+    const glm::vec3 center = (minCorner + maxCorner) * 0.5f;
+    for (size_t i = 0; i < outMesh.vertices.size(); ++i) {
+        outMesh.vertices[i].position -= center;
+    }
+    outMesh.boundsCenter = glm::vec3(0.0f);
 
     float maxDistanceSquared = 0.0f;
     for (size_t i = 0; i < outMesh.vertices.size(); ++i) {
-        const glm::vec3 offset = outMesh.vertices[i].position - outMesh.boundsCenter;
+        const glm::vec3 offset = outMesh.vertices[i].position;
         const float distanceSquared = glm::dot(offset, offset);
         if (distanceSquared > maxDistanceSquared) {
             maxDistanceSquared = distanceSquared;
