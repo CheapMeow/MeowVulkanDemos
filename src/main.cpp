@@ -18,6 +18,7 @@ int main(int argc, char** argv)
     std::string capturePath;
     DrawPath drawPath = DRAW_PATH_TRADITIONAL;
     float farPlane = 0.0f;
+    double switchEverySeconds = 0.0;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--instances") == 0 && i + 1 < argc) {
@@ -36,6 +37,9 @@ int main(int argc, char** argv)
             drawPath = DRAW_PATH_INDIRECT;
         } else if (std::strcmp(argv[i], "--far") == 0 && i + 1 < argc) {
             farPlane = static_cast<float>(std::atof(argv[i + 1]));
+            ++i;
+        } else if (std::strcmp(argv[i], "--switch-every") == 0 && i + 1 < argc) {
+            switchEverySeconds = std::atof(argv[i + 1]);
             ++i;
         }
     }
@@ -93,6 +97,7 @@ int main(int argc, char** argv)
     uint32_t lastDrawCallCount = 0;
 
     bool spaceWasPressed = false;
+    double lastSwitchTime = previousTime;
 
     GpuBuffer captureBuffer = {};
     bool captureRequested = !capturePath.empty();
@@ -108,9 +113,12 @@ int main(int argc, char** argv)
         }
 
         const bool spaceIsPressed = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-        if (spaceIsPressed && !spaceWasPressed) {
+        const bool switchByTimer =
+            switchEverySeconds > 0.0 && glfwGetTime() - lastSwitchTime >= switchEverySeconds;
+        if ((spaceIsPressed && !spaceWasPressed) || switchByTimer) {
             drawPath = drawPath == DRAW_PATH_TRADITIONAL ? DRAW_PATH_INDIRECT : DRAW_PATH_TRADITIONAL;
-            statisticsTime = glfwGetTime();
+            lastSwitchTime = glfwGetTime();
+            statisticsTime = lastSwitchTime;
             framesSinceStatistics = 0;
             accumulatedCpuCull = 0.0;
             accumulatedCpuRecord = 0.0;
