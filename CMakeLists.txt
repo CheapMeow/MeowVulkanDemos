@@ -19,6 +19,7 @@ add_subdirectory(external/glfw)
 
 add_executable(VulkanIndirectDrawDemo
     src/main.cpp
+    src/vk_context.cpp
 )
 
 target_include_directories(VulkanIndirectDrawDemo PRIVATE
