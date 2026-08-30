@@ -17,6 +17,7 @@ int main(int argc, char** argv)
     double autoExitSeconds = 0.0;
     std::string capturePath;
     DrawPath drawPath = DRAW_PATH_TRADITIONAL;
+    float farPlane = 0.0f;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--instances") == 0 && i + 1 < argc) {
@@ -33,6 +34,9 @@ int main(int argc, char** argv)
             ++i;
         } else if (std::strcmp(argv[i], "--indirect") == 0) {
             drawPath = DRAW_PATH_INDIRECT;
+        } else if (std::strcmp(argv[i], "--far") == 0 && i + 1 < argc) {
+            farPlane = static_cast<float>(std::atof(argv[i + 1]));
+            ++i;
         }
     }
 
@@ -66,6 +70,9 @@ int main(int argc, char** argv)
 
     Camera camera;
     initCamera(camera, instances);
+    if (farPlane > 0.0f) {
+        camera.farPlane = farPlane;
+    }
 
     std::vector<uint32_t> visibleIndices(instances.size());
 
