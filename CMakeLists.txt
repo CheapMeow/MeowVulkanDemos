@@ -20,6 +20,7 @@ add_subdirectory(external/glfw)
 add_executable(VulkanIndirectDrawDemo
     src/main.cpp
     src/vk_context.cpp
+    src/obj_loader.cpp
 )
 
 target_include_directories(VulkanIndirectDrawDemo PRIVATE
@@ -42,5 +43,6 @@ target_compile_definitions(VulkanIndirectDrawDemo PRIVATE
     GLFW_INCLUDE_VULKAN
     GLM_FORCE_RADIANS
     GLM_FORCE_DEPTH_ZERO_TO_ONE
+    _CRT_SECURE_NO_WARNINGS
     PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )

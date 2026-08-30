@@ -1,3 +1,4 @@
+#include "obj_loader.h"
 #include "vk_check.h"
 #include "vk_context.h"
 
@@ -80,6 +81,9 @@ int main(int argc, char** argv)
     VulkanContext ctx = {};
     createVulkanContext(ctx, window, true);
     createSwapchain(ctx);
+
+    MeshData mesh;
+    loadObj(std::string(PROJECT_ROOT_DIR) + "/assets/backpack/backpack.obj", mesh);
 
     VkRenderPass renderPass = createPresentRenderPass(ctx);
 
