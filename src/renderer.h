@@ -39,9 +39,18 @@ struct FrameResources {
     GpuBuffer cameraBuffer;
     GpuBuffer lightBuffer;
     GpuBuffer cpuVisibleBuffer;
+    GpuBuffer gpuVisibleBuffer;
+    GpuBuffer indirectBuffer;
+    GpuBuffer visibleCountReadbackBuffer;
+
     VkDescriptorSet sceneSet;
     VkDescriptorSet cpuVisibleSet;
+    VkDescriptorSet gpuVisibleSet;
+    VkDescriptorSet cullSet;
     VkDescriptorSet lightingSet;
+
+    VkQueryPool timestampPool;
+    bool timestampsValid;
 };
 
 struct Renderer {
@@ -68,6 +77,7 @@ struct Renderer {
     VkDescriptorSetLayout visibleSetLayout;
     VkDescriptorSetLayout materialSetLayout;
     VkDescriptorSetLayout lightingSetLayout;
+    VkDescriptorSetLayout cullSetLayout;
     VkDescriptorPool descriptorPool;
     VkDescriptorSet materialSet;
 
@@ -75,8 +85,21 @@ struct Renderer {
     VkPipeline gbufferPipeline;
     VkPipelineLayout lightingPipelineLayout;
     VkPipeline lightingPipeline;
+    VkPipelineLayout cullPipelineLayout;
+    VkPipeline cullPipeline;
+
+    float timestampPeriodNanoseconds;
 
     FrameResources frames[MAX_FRAMES_IN_FLIGHT];
+};
+
+// 一帧的耗时与工作量统计
+struct FrameStatistics {
+    double cpuCullMilliseconds;
+    double cpuRecordMilliseconds;
+    double gpuMilliseconds;
+    uint32_t drawCallCount;
+    uint32_t visibleInstanceCount;
 };
 
 void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData& mesh,
@@ -84,6 +107,7 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
 void destroyRenderer(const VulkanContext& ctx, Renderer& renderer);
 
 // 提交一帧。captureBuffer 非空时把本帧结果拷回该缓冲
-void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter,
+void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, DrawPath drawPath,
                const CameraUniform& cameraUniform, const std::vector<LightData>& lights,
-               const uint32_t* visibleIndices, uint32_t visibleCount, const GpuBuffer* captureBuffer);
+               const std::vector<InstanceData>& instances, uint32_t* visibleIndices, float boundsRadius,
+               const GpuBuffer* captureBuffer, FrameStatistics& outStatistics);

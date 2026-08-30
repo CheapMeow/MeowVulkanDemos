@@ -12,10 +12,11 @@
 
 int main(int argc, char** argv)
 {
-    uint32_t instanceCount = 20000;
-    uint32_t lightCount = 32;
+    uint32_t instanceCount = 200000;
+    uint32_t lightCount = 64;
     double autoExitSeconds = 0.0;
     std::string capturePath;
+    DrawPath drawPath = DRAW_PATH_TRADITIONAL;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--instances") == 0 && i + 1 < argc) {
@@ -30,6 +31,8 @@ int main(int argc, char** argv)
         } else if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc) {
             capturePath = argv[i + 1];
             ++i;
+        } else if (std::strcmp(argv[i], "--indirect") == 0) {
+            drawPath = DRAW_PATH_INDIRECT;
         }
     }
 
@@ -74,7 +77,15 @@ int main(int argc, char** argv)
     double statisticsTime = previousTime;
     const double startTime = previousTime;
     uint32_t framesSinceStatistics = 0;
+
+    // 统计量按窗口累加，显示时取平均
+    double accumulatedCpuCull = 0.0;
+    double accumulatedCpuRecord = 0.0;
+    double accumulatedGpu = 0.0;
     uint32_t lastVisibleCount = 0;
+    uint32_t lastDrawCallCount = 0;
+
+    bool spaceWasPressed = false;
 
     GpuBuffer captureBuffer = {};
     bool captureRequested = !capturePath.empty();
@@ -89,6 +100,17 @@ int main(int argc, char** argv)
             break;
         }
 
+        const bool spaceIsPressed = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+        if (spaceIsPressed && !spaceWasPressed) {
+            drawPath = drawPath == DRAW_PATH_TRADITIONAL ? DRAW_PATH_INDIRECT : DRAW_PATH_TRADITIONAL;
+            statisticsTime = glfwGetTime();
+            framesSinceStatistics = 0;
+            accumulatedCpuCull = 0.0;
+            accumulatedCpuRecord = 0.0;
+            accumulatedGpu = 0.0;
+        }
+        spaceWasPressed = spaceIsPressed;
+
         const double currentTime = glfwGetTime();
         const float deltaSeconds = static_cast<float>(currentTime - previousTime);
         previousTime = currentTime;
@@ -100,35 +122,47 @@ int main(int argc, char** argv)
         fillCameraUniform(camera, aspectRatio, static_cast<uint32_t>(instances.size()), mesh.boundsRadius,
                           static_cast<uint32_t>(lights.size()), cameraUniform);
 
-        const uint32_t visibleCount =
-            cullInstancesOnCpu(instances, cameraUniform.frustumPlanes, mesh.boundsRadius, visibleIndices.data());
-        lastVisibleCount = visibleCount;
-
         const bool shouldExit = autoExitSeconds > 0.0 && currentTime - startTime >= autoExitSeconds;
         const bool shouldCaptureThisFrame = captureRequested && !captureDone && shouldExit;
 
-        drawFrame(ctx, renderer, frameCounter, cameraUniform, lights, visibleIndices.data(), visibleCount,
-                  shouldCaptureThisFrame ? &captureBuffer : nullptr);
+        FrameStatistics statistics = {};
+        drawFrame(ctx, renderer, frameCounter, drawPath, cameraUniform, lights, instances, visibleIndices.data(),
+                  mesh.boundsRadius, shouldCaptureThisFrame ? &captureBuffer : nullptr, statistics);
         if (shouldCaptureThisFrame) {
             captureDone = true;
         }
         ++frameCounter;
         ++framesSinceStatistics;
 
+        accumulatedCpuCull += statistics.cpuCullMilliseconds;
+        accumulatedCpuRecord += statistics.cpuRecordMilliseconds;
+        accumulatedGpu += statistics.gpuMilliseconds;
+        lastVisibleCount = statistics.visibleInstanceCount;
+        lastDrawCallCount = statistics.drawCallCount;
+
         if (currentTime - statisticsTime >= 0.5) {
-            const double averageFrameMilliseconds =
-                (currentTime - statisticsTime) * 1000.0 / static_cast<double>(framesSinceStatistics);
-            char title[256];
+            const double frameCount = static_cast<double>(framesSinceStatistics);
+            const double averageFrameMilliseconds = (currentTime - statisticsTime) * 1000.0 / frameCount;
+            char title[512];
             std::snprintf(title, sizeof(title),
-                          "Vulkan Indirect Draw Demo | 传统路径 | 实例 %u | 可见 %u | %.2f ms | %.1f FPS",
-                          static_cast<uint32_t>(instances.size()), lastVisibleCount, averageFrameMilliseconds,
-                          1000.0 / averageFrameMilliseconds);
+                          "%s | 实例 %u | 可见 %u | 绘制命令 %u | 帧 %.2f ms (%.0f FPS) | 主机剔除 %.3f ms | "
+                          "主机记录 %.3f ms | 设备 %.2f ms",
+                          drawPath == DRAW_PATH_TRADITIONAL ? "传统 drawIndexed" : "indirect + 计算着色器剔除",
+                          static_cast<uint32_t>(instances.size()), lastVisibleCount, lastDrawCallCount,
+                          averageFrameMilliseconds, 1000.0 / averageFrameMilliseconds,
+                          accumulatedCpuCull / frameCount, accumulatedCpuRecord / frameCount,
+                          accumulatedGpu / frameCount);
             glfwSetWindowTitle(window, title);
+            std::printf("%s\n", title);
+
             statisticsTime = currentTime;
             framesSinceStatistics = 0;
+            accumulatedCpuCull = 0.0;
+            accumulatedCpuRecord = 0.0;
+            accumulatedGpu = 0.0;
         }
 
-        if (autoExitSeconds > 0.0 && currentTime - startTime >= autoExitSeconds) {
+        if (shouldExit) {
             break;
         }
     }
@@ -140,8 +174,8 @@ int main(int argc, char** argv)
         destroyBuffer(ctx, captureBuffer);
     }
 
-    std::printf("共提交 %llu 帧, 最后一帧可见实例 %u\n", static_cast<unsigned long long>(frameCounter),
-                lastVisibleCount);
+    std::printf("共提交 %llu 帧, 最后一帧可见实例 %u, 绘制命令 %u\n",
+                static_cast<unsigned long long>(frameCounter), lastVisibleCount, lastDrawCallCount);
 
     destroyRenderer(ctx, renderer);
     destroySwapchain(ctx);

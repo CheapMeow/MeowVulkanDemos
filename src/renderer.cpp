@@ -2,6 +2,8 @@
 
 #include "vk_check.h"
 
+#include <GLFW/glfw3.h>
+
 #include <cstddef>
 #include <cstring>
 
@@ -209,6 +211,20 @@ static void createDescriptorLayouts(const VulkanContext& ctx, Renderer& renderer
     lightingLayoutInfo.bindingCount = 4;
     lightingLayoutInfo.pBindings = lightingBindings;
     VK_CHECK(vkCreateDescriptorSetLayout(ctx.device, &lightingLayoutInfo, nullptr, &renderer.lightingSetLayout));
+
+    VkDescriptorSetLayoutBinding cullBindings[2] = {};
+    for (int i = 0; i < 2; ++i) {
+        cullBindings[i].binding = static_cast<uint32_t>(i);
+        cullBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        cullBindings[i].descriptorCount = 1;
+        cullBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+
+    VkDescriptorSetLayoutCreateInfo cullLayoutInfo = {};
+    cullLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    cullLayoutInfo.bindingCount = 2;
+    cullLayoutInfo.pBindings = cullBindings;
+    VK_CHECK(vkCreateDescriptorSetLayout(ctx.device, &cullLayoutInfo, nullptr, &renderer.cullSetLayout));
 }
 
 static void createDescriptorPool(const VulkanContext& ctx, Renderer& renderer)
@@ -479,6 +495,34 @@ static void createLightingPipeline(const VulkanContext& ctx, Renderer& renderer)
     vkDestroyShaderModule(ctx.device, fragmentModule, nullptr);
 }
 
+static void createCullPipeline(const VulkanContext& ctx, Renderer& renderer)
+{
+    VkDescriptorSetLayout setLayouts[2] = { renderer.sceneSetLayout, renderer.cullSetLayout };
+
+    VkPipelineLayoutCreateInfo layoutInfo = {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = setLayouts;
+    VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.cullPipelineLayout));
+
+    VkShaderModule computeModule = loadShaderModule(ctx, std::string(SHADER_BINARY_DIR) + "/cull.comp.spv");
+
+    VkPipelineShaderStageCreateInfo stage = {};
+    stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = computeModule;
+    stage.pName = "main";
+
+    VkComputePipelineCreateInfo pipelineInfo = {};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage = stage;
+    pipelineInfo.layout = renderer.cullPipelineLayout;
+    VK_CHECK(vkCreateComputePipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                      &renderer.cullPipeline));
+
+    vkDestroyShaderModule(ctx.device, computeModule, nullptr);
+}
+
 void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData& mesh,
                     const std::vector<InstanceData>& instances, uint32_t lightCount)
 {
@@ -538,6 +582,9 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
     createDescriptorPool(ctx, renderer);
     createGBufferPipeline(ctx, renderer);
     createLightingPipeline(ctx, renderer);
+    createCullPipeline(ctx, renderer);
+
+    renderer.timestampPeriodNanoseconds = ctx.physicalDeviceProperties.limits.timestampPeriod;
 
     renderer.materialSet = allocateDescriptorSet(ctx, renderer, renderer.materialSetLayout);
     writeImageDescriptor(ctx, renderer.materialSet, 0, renderer.material.albedo.view, renderer.material.sampler);
@@ -575,6 +622,24 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
         createBuffer(ctx, sizeof(uint32_t) * renderer.instanceCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                      frame.cpuVisibleBuffer);
+        createBuffer(ctx, sizeof(uint32_t) * renderer.instanceCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, frame.gpuVisibleBuffer);
+        createBuffer(ctx, sizeof(VkDrawIndexedIndirectCommand),
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, frame.indirectBuffer);
+        createBuffer(ctx, sizeof(uint32_t), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     frame.visibleCountReadbackBuffer);
+
+        // 绘制命令中除实例数量以外的字段保持不变，只需初始化一次
+        VkDrawIndexedIndirectCommand initialCommand = {};
+        initialCommand.indexCount = renderer.indexCount;
+        initialCommand.instanceCount = 0;
+        initialCommand.firstIndex = 0;
+        initialCommand.vertexOffset = 0;
+        initialCommand.firstInstance = 0;
+        uploadBufferData(ctx, frame.indirectBuffer, &initialCommand, sizeof(initialCommand));
 
         frame.sceneSet = allocateDescriptorSet(ctx, renderer, renderer.sceneSetLayout);
         writeBufferDescriptor(ctx, frame.sceneSet, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frame.cameraBuffer);
@@ -584,6 +649,14 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
         writeBufferDescriptor(ctx, frame.cpuVisibleSet, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                               frame.cpuVisibleBuffer);
 
+        frame.gpuVisibleSet = allocateDescriptorSet(ctx, renderer, renderer.visibleSetLayout);
+        writeBufferDescriptor(ctx, frame.gpuVisibleSet, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                              frame.gpuVisibleBuffer);
+
+        frame.cullSet = allocateDescriptorSet(ctx, renderer, renderer.cullSetLayout);
+        writeBufferDescriptor(ctx, frame.cullSet, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.gpuVisibleBuffer);
+        writeBufferDescriptor(ctx, frame.cullSet, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.indirectBuffer);
+
         frame.lightingSet = allocateDescriptorSet(ctx, renderer, renderer.lightingSetLayout);
         writeImageDescriptor(ctx, frame.lightingSet, 0, renderer.gbuffer.albedoOcclusion.view,
                              renderer.material.sampler);
@@ -592,6 +665,13 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
         writeImageDescriptor(ctx, frame.lightingSet, 2, renderer.gbuffer.positionMetallic.view,
                              renderer.material.sampler);
         writeBufferDescriptor(ctx, frame.lightingSet, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.lightBuffer);
+
+        VkQueryPoolCreateInfo queryPoolInfo = {};
+        queryPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        queryPoolInfo.queryCount = 2;
+        VK_CHECK(vkCreateQueryPool(ctx.device, &queryPoolInfo, nullptr, &frame.timestampPool));
+        frame.timestampsValid = false;
     }
 }
 
@@ -599,6 +679,10 @@ void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
 {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         FrameResources& frame = renderer.frames[i];
+        vkDestroyQueryPool(ctx.device, frame.timestampPool, nullptr);
+        destroyBuffer(ctx, frame.visibleCountReadbackBuffer);
+        destroyBuffer(ctx, frame.indirectBuffer);
+        destroyBuffer(ctx, frame.gpuVisibleBuffer);
         destroyBuffer(ctx, frame.cpuVisibleBuffer);
         destroyBuffer(ctx, frame.lightBuffer);
         destroyBuffer(ctx, frame.cameraBuffer);
@@ -607,12 +691,15 @@ void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
         vkFreeCommandBuffers(ctx.device, ctx.commandPool, 1, &frame.commandBuffer);
     }
 
+    vkDestroyPipeline(ctx.device, renderer.cullPipeline, nullptr);
+    vkDestroyPipelineLayout(ctx.device, renderer.cullPipelineLayout, nullptr);
     vkDestroyPipeline(ctx.device, renderer.lightingPipeline, nullptr);
     vkDestroyPipelineLayout(ctx.device, renderer.lightingPipelineLayout, nullptr);
     vkDestroyPipeline(ctx.device, renderer.gbufferPipeline, nullptr);
     vkDestroyPipelineLayout(ctx.device, renderer.gbufferPipelineLayout, nullptr);
 
     vkDestroyDescriptorPool(ctx.device, renderer.descriptorPool, nullptr);
+    vkDestroyDescriptorSetLayout(ctx.device, renderer.cullSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(ctx.device, renderer.lightingSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(ctx.device, renderer.materialSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(ctx.device, renderer.visibleSetLayout, nullptr);
@@ -644,13 +731,24 @@ void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
     destroyBuffer(ctx, renderer.vertexBuffer);
 }
 
-void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter,
+void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, DrawPath drawPath,
                const CameraUniform& cameraUniform, const std::vector<LightData>& lights,
-               const uint32_t* visibleIndices, uint32_t visibleCount, const GpuBuffer* captureBuffer)
+               const std::vector<InstanceData>& instances, uint32_t* visibleIndices, float boundsRadius,
+               const GpuBuffer* captureBuffer, FrameStatistics& outStatistics)
 {
     FrameResources& frame = renderer.frames[frameCounter % MAX_FRAMES_IN_FLIGHT];
 
     VK_CHECK(vkWaitForFences(ctx.device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
+
+    // 上一次使用本组资源的那一帧已经完成，可以读取它的计时与可见数量
+    outStatistics.gpuMilliseconds = 0.0;
+    if (frame.timestampsValid) {
+        uint64_t timestamps[2] = { 0, 0 };
+        VK_CHECK(vkGetQueryPoolResults(ctx.device, frame.timestampPool, 0, 2, sizeof(timestamps), timestamps,
+                                       sizeof(uint64_t), VK_QUERY_RESULT_64_BIT));
+        outStatistics.gpuMilliseconds = static_cast<double>(timestamps[1] - timestamps[0]) *
+                                        static_cast<double>(renderer.timestampPeriodNanoseconds) / 1000000.0;
+    }
 
     uint32_t imageIndex = 0;
     VK_CHECK(vkAcquireNextImageKHR(ctx.device, ctx.swapchain, UINT64_MAX, frame.imageAvailable, VK_NULL_HANDLE,
@@ -664,7 +762,21 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
 
     std::memcpy(frame.cameraBuffer.mapped, &cameraUniform, sizeof(CameraUniform));
     std::memcpy(frame.lightBuffer.mapped, lights.data(), sizeof(LightData) * lights.size());
-    std::memcpy(frame.cpuVisibleBuffer.mapped, visibleIndices, sizeof(uint32_t) * visibleCount);
+
+    // 传统路径的剔除在主机上完成，可见列表逐帧写入主机可见内存
+    uint32_t cpuVisibleCount = 0;
+    outStatistics.cpuCullMilliseconds = 0.0;
+    if (drawPath == DRAW_PATH_TRADITIONAL) {
+        const double cullStart = glfwGetTime();
+        cpuVisibleCount = cullInstancesOnCpu(instances, cameraUniform.frustumPlanes, boundsRadius, visibleIndices);
+        std::memcpy(frame.cpuVisibleBuffer.mapped, visibleIndices, sizeof(uint32_t) * cpuVisibleCount);
+        outStatistics.cpuCullMilliseconds = (glfwGetTime() - cullStart) * 1000.0;
+    } else {
+        // indirect 路径读取上一轮同组资源写回的可见数量，仅用于显示
+        cpuVisibleCount = *static_cast<const uint32_t*>(frame.visibleCountReadbackBuffer.mapped);
+    }
+
+    const double recordStart = glfwGetTime();
 
     VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
 
@@ -672,6 +784,57 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo));
+
+    vkCmdResetQueryPool(frame.commandBuffer, frame.timestampPool, 0, 2);
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.timestampPool, 0);
+
+    if (drawPath == DRAW_PATH_INDIRECT) {
+        // 实例数量清零后由计算着色器用原子累加填充
+        vkCmdFillBuffer(frame.commandBuffer, frame.indirectBuffer.buffer,
+                        offsetof(VkDrawIndexedIndirectCommand, instanceCount), sizeof(uint32_t), 0);
+
+        VkBufferMemoryBarrier clearBarrier = {};
+        clearBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        clearBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        clearBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        clearBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        clearBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        clearBarrier.buffer = frame.indirectBuffer.buffer;
+        clearBarrier.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &clearBarrier, 0, nullptr);
+
+        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, renderer.cullPipeline);
+        VkDescriptorSet cullSets[2] = { frame.sceneSet, frame.cullSet };
+        vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, renderer.cullPipelineLayout,
+                                0, 2, cullSets, 0, nullptr);
+        vkCmdDispatch(frame.commandBuffer, (renderer.instanceCount + 63) / 64, 1, 1);
+
+        VkBufferMemoryBarrier cullBarriers[2] = {};
+        cullBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        cullBarriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        cullBarriers[0].dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        cullBarriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        cullBarriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        cullBarriers[0].buffer = frame.indirectBuffer.buffer;
+        cullBarriers[0].size = VK_WHOLE_SIZE;
+
+        cullBarriers[1] = cullBarriers[0];
+        cullBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        cullBarriers[1].buffer = frame.gpuVisibleBuffer.buffer;
+
+        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+                                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                             0, 0, nullptr, 2, cullBarriers, 0, nullptr);
+
+        // 把实例数量取回主机，仅用于界面显示
+        VkBufferCopy countCopy = {};
+        countCopy.srcOffset = offsetof(VkDrawIndexedIndirectCommand, instanceCount);
+        countCopy.size = sizeof(uint32_t);
+        vkCmdCopyBuffer(frame.commandBuffer, frame.indirectBuffer.buffer,
+                        frame.visibleCountReadbackBuffer.buffer, 1, &countCopy);
+    }
 
     VkViewport viewport = {};
     viewport.width = static_cast<float>(ctx.swapchainExtent.width);
@@ -697,7 +860,10 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.gbufferPipeline);
 
-    VkDescriptorSet gbufferSets[3] = { frame.sceneSet, frame.cpuVisibleSet, renderer.materialSet };
+    VkDescriptorSet gbufferSets[3] = { frame.sceneSet,
+                                       drawPath == DRAW_PATH_TRADITIONAL ? frame.cpuVisibleSet
+                                                                         : frame.gpuVisibleSet,
+                                       renderer.materialSet };
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.gbufferPipelineLayout,
                             0, 3, gbufferSets, 0, nullptr);
 
@@ -705,9 +871,17 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &renderer.vertexBuffer.buffer, &vertexOffset);
     vkCmdBindIndexBuffer(frame.commandBuffer, renderer.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-    // 传统路径：每个可见实例记录一条绘制命令
-    for (uint32_t i = 0; i < visibleCount; ++i) {
-        vkCmdDrawIndexed(frame.commandBuffer, renderer.indexCount, 1, 0, 0, i);
+    if (drawPath == DRAW_PATH_TRADITIONAL) {
+        // 每个可见实例记录一条绘制命令
+        for (uint32_t i = 0; i < cpuVisibleCount; ++i) {
+            vkCmdDrawIndexed(frame.commandBuffer, renderer.indexCount, 1, 0, 0, i);
+        }
+        outStatistics.drawCallCount = cpuVisibleCount;
+    } else {
+        // 实例数量由显存中的绘制命令决定，主机不需要知道可见集合
+        vkCmdDrawIndexedIndirect(frame.commandBuffer, frame.indirectBuffer.buffer, 0, 1,
+                                 sizeof(VkDrawIndexedIndirectCommand));
+        outStatistics.drawCallCount = 1;
     }
 
     vkCmdEndRenderPass(frame.commandBuffer);
@@ -763,6 +937,8 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &backToPresent);
     }
 
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.timestampPool, 1);
+
     VK_CHECK(vkEndCommandBuffer(frame.commandBuffer));
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -776,6 +952,10 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &renderer.presentSemaphores[imageIndex];
     VK_CHECK(vkQueueSubmit(ctx.queue, 1, &submitInfo, frame.inFlight));
+
+    frame.timestampsValid = true;
+    outStatistics.cpuRecordMilliseconds = (glfwGetTime() - recordStart) * 1000.0;
+    outStatistics.visibleInstanceCount = cpuVisibleCount;
 
     VkPresentInfoKHR presentInfo = {};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;

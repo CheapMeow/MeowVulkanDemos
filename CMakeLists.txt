@@ -34,6 +34,7 @@ set(SHADER_SOURCES
     shaders/gbuffer.frag
     shaders/fullscreen.vert
     shaders/lighting.frag
+    shaders/cull.comp
 )
 
 set(SHADER_BINARY_DIR "${CMAKE_BINARY_DIR}/shaders")

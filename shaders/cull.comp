@@ -1,0 +1,41 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "scene_common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 1, binding = 0) writeonly buffer VisibleBuffer {
+    uint visibleIndices[];
+} visibleBuffer;
+
+// 与 VkDrawIndexedIndirectCommand 逐字节对应
+layout(set = 1, binding = 1) buffer IndirectBuffer {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+} indirectCommand;
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= uint(camera.cullParams.x)) {
+        return;
+    }
+
+    InstanceData instance = instanceBuffer.instances[index];
+    vec3 center = instance.positionScale.xyz;
+    float radius = camera.cullParams.y * instance.positionScale.w;
+
+    for (int plane = 0; plane < 6; ++plane) {
+        float distance = dot(camera.frustumPlanes[plane].xyz, center) + camera.frustumPlanes[plane].w;
+        if (distance < -radius) {
+            return;
+        }
+    }
+
+    uint slot = atomicAdd(indirectCommand.instanceCount, 1);
+    visibleBuffer.visibleIndices[slot] = index;
+}
