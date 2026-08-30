@@ -1,5 +1,6 @@
 #include "renderer.h"
 
+#include "user_interface.h"
 #include "vk_check.h"
 
 #include <GLFW/glfw3.h>
@@ -524,13 +525,13 @@ static void createCullPipeline(const VulkanContext& ctx, Renderer& renderer)
 }
 
 void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData& mesh,
-                    const std::vector<InstanceData>& instances, uint32_t lightCount)
+                    const std::vector<InstanceData>& instances, uint32_t lightCapacity)
 {
     renderer = Renderer();
     renderer.indexCount = static_cast<uint32_t>(mesh.indices.size());
     renderer.boundsRadius = mesh.boundsRadius;
-    renderer.instanceCount = static_cast<uint32_t>(instances.size());
-    renderer.lightCount = lightCount;
+    renderer.instanceCapacity = static_cast<uint32_t>(instances.size());
+    renderer.lightCapacity = lightCapacity;
 
     const VkDeviceSize vertexBytes = sizeof(MeshVertex) * mesh.vertices.size();
     createBuffer(ctx, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -616,13 +617,13 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
         createBuffer(ctx, sizeof(CameraUniform), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                      frame.cameraBuffer);
-        createBuffer(ctx, sizeof(LightData) * renderer.lightCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        createBuffer(ctx, sizeof(LightData) * renderer.lightCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                      frame.lightBuffer);
-        createBuffer(ctx, sizeof(uint32_t) * renderer.instanceCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        createBuffer(ctx, sizeof(uint32_t) * renderer.instanceCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                      frame.cpuVisibleBuffer);
-        createBuffer(ctx, sizeof(uint32_t) * renderer.instanceCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        createBuffer(ctx, sizeof(uint32_t) * renderer.instanceCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, frame.gpuVisibleBuffer);
         createBuffer(ctx, sizeof(VkDrawIndexedIndirectCommand),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
@@ -731,10 +732,10 @@ void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
     destroyBuffer(ctx, renderer.vertexBuffer);
 }
 
-void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, DrawPath drawPath,
+void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, const FrameInput& input,
                const CameraUniform& cameraUniform, const std::vector<LightData>& lights,
-               const std::vector<InstanceData>& instances, uint32_t* visibleIndices, float boundsRadius,
-               const GpuBuffer* captureBuffer, FrameStatistics& outStatistics)
+               const std::vector<InstanceData>& instances, uint32_t* visibleIndices,
+               FrameStatistics& outStatistics)
 {
     FrameResources& frame = renderer.frames[frameCounter % MAX_FRAMES_IN_FLIGHT];
 
@@ -761,14 +762,15 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     VK_CHECK(vkResetFences(ctx.device, 1, &frame.inFlight));
 
     std::memcpy(frame.cameraBuffer.mapped, &cameraUniform, sizeof(CameraUniform));
-    std::memcpy(frame.lightBuffer.mapped, lights.data(), sizeof(LightData) * lights.size());
+    std::memcpy(frame.lightBuffer.mapped, lights.data(), sizeof(LightData) * input.activeLightCount);
 
     // 传统路径的剔除在主机上完成，可见列表逐帧写入主机可见内存
     uint32_t cpuVisibleCount = 0;
     outStatistics.cpuCullMilliseconds = 0.0;
-    if (drawPath == DRAW_PATH_TRADITIONAL) {
+    if (input.drawPath == DRAW_PATH_TRADITIONAL) {
         const double cullStart = glfwGetTime();
-        cpuVisibleCount = cullInstancesOnCpu(instances, cameraUniform.frustumPlanes, boundsRadius, visibleIndices);
+        cpuVisibleCount = cullInstancesOnCpu(instances, input.activeInstanceCount, cameraUniform.frustumPlanes,
+                                             renderer.boundsRadius, visibleIndices);
         std::memcpy(frame.cpuVisibleBuffer.mapped, visibleIndices, sizeof(uint32_t) * cpuVisibleCount);
         outStatistics.cpuCullMilliseconds = (glfwGetTime() - cullStart) * 1000.0;
     } else {
@@ -788,7 +790,7 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdResetQueryPool(frame.commandBuffer, frame.timestampPool, 0, 2);
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.timestampPool, 0);
 
-    if (drawPath == DRAW_PATH_INDIRECT) {
+    if (input.drawPath == DRAW_PATH_INDIRECT) {
         // 实例数量清零后由计算着色器用原子累加填充
         vkCmdFillBuffer(frame.commandBuffer, frame.indirectBuffer.buffer,
                         offsetof(VkDrawIndexedIndirectCommand, instanceCount), sizeof(uint32_t), 0);
@@ -808,7 +810,7 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         VkDescriptorSet cullSets[2] = { frame.sceneSet, frame.cullSet };
         vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, renderer.cullPipelineLayout,
                                 0, 2, cullSets, 0, nullptr);
-        vkCmdDispatch(frame.commandBuffer, (renderer.instanceCount + 63) / 64, 1, 1);
+        vkCmdDispatch(frame.commandBuffer, (input.activeInstanceCount + 63) / 64, 1, 1);
 
         VkBufferMemoryBarrier cullBarriers[2] = {};
         cullBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -861,8 +863,8 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.gbufferPipeline);
 
     VkDescriptorSet gbufferSets[3] = { frame.sceneSet,
-                                       drawPath == DRAW_PATH_TRADITIONAL ? frame.cpuVisibleSet
-                                                                         : frame.gpuVisibleSet,
+                                       input.drawPath == DRAW_PATH_TRADITIONAL ? frame.cpuVisibleSet
+                                                                               : frame.gpuVisibleSet,
                                        renderer.materialSet };
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.gbufferPipelineLayout,
                             0, 3, gbufferSets, 0, nullptr);
@@ -871,7 +873,7 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &renderer.vertexBuffer.buffer, &vertexOffset);
     vkCmdBindIndexBuffer(frame.commandBuffer, renderer.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-    if (drawPath == DRAW_PATH_TRADITIONAL) {
+    if (input.drawPath == DRAW_PATH_TRADITIONAL) {
         // 每个可见实例记录一条绘制命令
         for (uint32_t i = 0; i < cpuVisibleCount; ++i) {
             vkCmdDrawIndexed(frame.commandBuffer, renderer.indexCount, 1, 0, 0, i);
@@ -901,9 +903,14 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.lightingPipelineLayout,
                             0, 2, lightingSets, 0, nullptr);
     vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
+
+    if (input.drawUserInterface) {
+        recordUserInterfaceCommands(frame.commandBuffer);
+    }
+
     vkCmdEndRenderPass(frame.commandBuffer);
 
-    if (captureBuffer != nullptr) {
+    if (input.captureBuffer != nullptr) {
         VkImageMemoryBarrier toTransferSource = {};
         toTransferSource.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         toTransferSource.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
@@ -926,7 +933,7 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         copyRegion.imageExtent.height = ctx.swapchainExtent.height;
         copyRegion.imageExtent.depth = 1;
         vkCmdCopyImageToBuffer(frame.commandBuffer, ctx.swapchainImages[imageIndex],
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, captureBuffer->buffer, 1, &copyRegion);
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, input.captureBuffer->buffer, 1, &copyRegion);
 
         VkImageMemoryBarrier backToPresent = toTransferSource;
         backToPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;

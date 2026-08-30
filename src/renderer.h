@@ -60,8 +60,9 @@ struct Renderer {
     float boundsRadius;
 
     GpuBuffer instanceBuffer;
-    uint32_t instanceCount;
-    uint32_t lightCount;
+    // 缓冲按容量分配，界面上调整的活动数量不会超过它，因此切换数量无需重建资源
+    uint32_t instanceCapacity;
+    uint32_t lightCapacity;
 
     MaterialTextures material;
     GBufferTargets gbuffer;
@@ -103,11 +104,21 @@ struct FrameStatistics {
 };
 
 void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData& mesh,
-                    const std::vector<InstanceData>& instances, uint32_t lightCount);
+                    const std::vector<InstanceData>& instances, uint32_t lightCapacity);
 void destroyRenderer(const VulkanContext& ctx, Renderer& renderer);
 
-// 提交一帧。captureBuffer 非空时把本帧结果拷回该缓冲
-void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, DrawPath drawPath,
+// 一帧的绘制输入
+struct FrameInput {
+    DrawPath drawPath;
+    uint32_t activeInstanceCount;
+    uint32_t activeLightCount;
+    // 界面绘制数据是否记录到本帧，抓取画面时关闭以便两条路径的结果逐像素可比
+    bool drawUserInterface;
+    // 非空时把本帧结果拷回该缓冲
+    const GpuBuffer* captureBuffer;
+};
+
+void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, const FrameInput& input,
                const CameraUniform& cameraUniform, const std::vector<LightData>& lights,
-               const std::vector<InstanceData>& instances, uint32_t* visibleIndices, float boundsRadius,
-               const GpuBuffer* captureBuffer, FrameStatistics& outStatistics);
+               const std::vector<InstanceData>& instances, uint32_t* visibleIndices,
+               FrameStatistics& outStatistics);

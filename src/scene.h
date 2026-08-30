@@ -39,9 +39,12 @@ struct Camera {
     float moveSpeed;
 };
 
+// 生成实例网格，并按到网格中心的距离排序。
+// 这样界面上减少实例数量时，留下的始终是相机附近的一团，密度保持不变
 void buildInstances(uint32_t instanceCount, float spacing, std::vector<InstanceData>& outInstances);
 // 光源按固定间距平铺，网格随相机所在区域对齐，保证任何位置都有照明
-void updateLights(const glm::vec3& cameraPosition, float spacing, float range, std::vector<LightData>& lights);
+void updateLights(const glm::vec3& cameraPosition, uint32_t lightCount, float spacing, float range,
+                  std::vector<LightData>& lights);
 
 void initCamera(Camera& camera, const std::vector<InstanceData>& instances);
 void updateCamera(Camera& camera, GLFWwindow* window, float deltaSeconds);
@@ -49,5 +52,5 @@ void fillCameraUniform(const Camera& camera, float aspectRatio, uint32_t instanc
                        uint32_t lightCount, CameraUniform& outUniform);
 
 // 逐实例做包围球与视锥的相交判断，可见实例编号写入输出数组
-uint32_t cullInstancesOnCpu(const std::vector<InstanceData>& instances, const glm::vec4* frustumPlanes,
-                            float boundsRadius, uint32_t* outVisibleIndices);
+uint32_t cullInstancesOnCpu(const std::vector<InstanceData>& instances, uint32_t instanceCount,
+                            const glm::vec4* frustumPlanes, float boundsRadius, uint32_t* outVisibleIndices);

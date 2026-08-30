@@ -3,19 +3,45 @@
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cmath>
+
+// 排序用的中间记录
+struct InstanceSortEntry {
+    float distanceToCenter;
+    uint32_t gridIndex;
+};
+
+static bool compareByDistanceToCenter(const InstanceSortEntry& left, const InstanceSortEntry& right)
+{
+    if (left.distanceToCenter != right.distanceToCenter) {
+        return left.distanceToCenter < right.distanceToCenter;
+    }
+    return left.gridIndex < right.gridIndex;
+}
 
 void buildInstances(uint32_t instanceCount, float spacing, std::vector<InstanceData>& outInstances)
 {
+    const uint32_t gridSide = static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<float>(instanceCount))));
+    const float gridCenter = 0.5f * static_cast<float>(gridSide - 1);
+
+    std::vector<InstanceSortEntry> sortEntries(instanceCount);
+    for (uint32_t i = 0; i < instanceCount; ++i) {
+        const float offsetX = static_cast<float>(i % gridSide) - gridCenter;
+        const float offsetZ = static_cast<float>(i / gridSide) - gridCenter;
+        sortEntries[i].distanceToCenter = offsetX * offsetX + offsetZ * offsetZ;
+        sortEntries[i].gridIndex = i;
+    }
+    std::sort(sortEntries.begin(), sortEntries.end(), compareByDistanceToCenter);
+
+    const float gridOrigin = -gridCenter * spacing;
+
     outInstances.clear();
     outInstances.reserve(instanceCount);
-
-    const uint32_t gridSide = static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<float>(instanceCount))));
-    const float gridOrigin = -0.5f * static_cast<float>(gridSide - 1) * spacing;
-
     for (uint32_t i = 0; i < instanceCount; ++i) {
-        const uint32_t gridX = i % gridSide;
-        const uint32_t gridZ = i / gridSide;
+        const uint32_t gridIndex = sortEntries[i].gridIndex;
+        const uint32_t gridX = gridIndex % gridSide;
+        const uint32_t gridZ = gridIndex / gridSide;
 
         InstanceData instance;
         const float x = gridOrigin + static_cast<float>(gridX) * spacing;
@@ -24,14 +50,14 @@ void buildInstances(uint32_t instanceCount, float spacing, std::vector<InstanceD
                         8.0f * std::cos(static_cast<float>(gridZ) * 0.5f);
 
         instance.positionScale = glm::vec4(x, y, z, 1.0f);
-        instance.rotation = glm::vec4(static_cast<float>(i) * 0.37f, 0.0f, 0.0f, 0.0f);
+        instance.rotation = glm::vec4(static_cast<float>(gridIndex) * 0.37f, 0.0f, 0.0f, 0.0f);
         outInstances.push_back(instance);
     }
 }
 
-void updateLights(const glm::vec3& cameraPosition, float spacing, float range, std::vector<LightData>& lights)
+void updateLights(const glm::vec3& cameraPosition, uint32_t lightCount, float spacing, float range,
+                  std::vector<LightData>& lights)
 {
-    const uint32_t lightCount = static_cast<uint32_t>(lights.size());
     const uint32_t gridSide = static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<float>(lightCount))));
 
     // 网格原点对齐到间距的整数倍，相机移动时光源位置不会抖动
@@ -62,8 +88,8 @@ void updateLights(const glm::vec3& cameraPosition, float spacing, float range, s
 void initCamera(Camera& camera, const std::vector<InstanceData>& instances)
 {
     camera = Camera();
-    // 起始位置放在实例网格中央，视锥内外都有大量实例
-    const glm::vec3 gridCenter = glm::vec3(instances[instances.size() / 2].positionScale);
+    // 实例已按到网格中心的距离排序，第一个就是最靠近中心的
+    const glm::vec3 gridCenter = glm::vec3(instances[0].positionScale);
     camera.position = gridCenter + glm::vec3(0.0f, 2.5f, 0.0f);
     camera.yaw = 0.785f;
     camera.pitch = 0.0f;
@@ -165,13 +191,12 @@ void fillCameraUniform(const Camera& camera, float aspectRatio, uint32_t instanc
                                       static_cast<float>(lightCount), 0.0f);
 }
 
-uint32_t cullInstancesOnCpu(const std::vector<InstanceData>& instances, const glm::vec4* frustumPlanes,
-                            float boundsRadius, uint32_t* outVisibleIndices)
+uint32_t cullInstancesOnCpu(const std::vector<InstanceData>& instances, uint32_t instanceCount,
+                            const glm::vec4* frustumPlanes, float boundsRadius, uint32_t* outVisibleIndices)
 {
     uint32_t visibleCount = 0;
-    const size_t instanceCount = instances.size();
 
-    for (size_t i = 0; i < instanceCount; ++i) {
+    for (uint32_t i = 0; i < instanceCount; ++i) {
         const glm::vec3 center = glm::vec3(instances[i].positionScale);
         const float radius = boundsRadius * instances[i].positionScale.w;
 
@@ -185,7 +210,7 @@ uint32_t cullInstancesOnCpu(const std::vector<InstanceData>& instances, const gl
         }
 
         if (visible) {
-            outVisibleIndices[visibleCount] = static_cast<uint32_t>(i);
+            outVisibleIndices[visibleCount] = i;
             ++visibleCount;
         }
     }
