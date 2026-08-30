@@ -20,8 +20,40 @@ add_subdirectory(external/glfw)
 add_executable(VulkanIndirectDrawDemo
     src/main.cpp
     src/vk_context.cpp
+    src/vk_resources.cpp
     src/obj_loader.cpp
+    src/stb_image_impl.cpp
 )
+
+set(SHADER_SOURCES
+    shaders/gbuffer.vert
+    shaders/gbuffer.frag
+    shaders/fullscreen.vert
+    shaders/lighting.frag
+)
+
+set(SHADER_BINARY_DIR "${CMAKE_BINARY_DIR}/shaders")
+file(MAKE_DIRECTORY "${SHADER_BINARY_DIR}")
+
+set(COMPILED_SHADERS)
+foreach(SHADER_SOURCE ${SHADER_SOURCES})
+    get_filename_component(SHADER_NAME "${SHADER_SOURCE}" NAME)
+    set(SHADER_OUTPUT "${SHADER_BINARY_DIR}/${SHADER_NAME}.spv")
+    add_custom_command(
+        OUTPUT "${SHADER_OUTPUT}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=vulkan1.2
+                -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+                "${CMAKE_CURRENT_SOURCE_DIR}/${SHADER_SOURCE}" -o "${SHADER_OUTPUT}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${SHADER_SOURCE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene_common.glsl"
+        COMMENT "编译着色器 ${SHADER_NAME}"
+        VERBATIM
+    )
+    list(APPEND COMPILED_SHADERS "${SHADER_OUTPUT}")
+endforeach()
+
+add_custom_target(CompileShaders DEPENDS ${COMPILED_SHADERS})
+add_dependencies(VulkanIndirectDrawDemo CompileShaders)
 
 target_include_directories(VulkanIndirectDrawDemo PRIVATE
     "${VULKAN_SDK_DIR}/Include"
@@ -45,4 +77,5 @@ target_compile_definitions(VulkanIndirectDrawDemo PRIVATE
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     _CRT_SECURE_NO_WARNINGS
     PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    SHADER_BINARY_DIR="${SHADER_BINARY_DIR}"
 )
