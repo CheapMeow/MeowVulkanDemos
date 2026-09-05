@@ -13,6 +13,18 @@
 #include <string>
 #include <vector>
 
+// 统计行与测量报告里的路径名称
+static const char* drawPathName(DrawPath drawPath)
+{
+    if (drawPath == DRAW_PATH_TRADITIONAL) {
+        return "per-instance drawIndexed";
+    }
+    if (drawPath == DRAW_PATH_INSTANCED) {
+        return "instanced drawIndexed";
+    }
+    return "indirect + compute shader culling";
+}
+
 int main(int argc, char** argv)
 {
     configureConsoleEncoding();
@@ -22,6 +34,7 @@ int main(int argc, char** argv)
     uint32_t lightCapacity = 256;
     double autoExitSeconds = 0.0;
     std::string capturePath;
+    std::string reportPath;
     DrawPath drawPath = DRAW_PATH_TRADITIONAL;
     float farPlane = 160.0f;
     double switchEverySeconds = 0.0;
@@ -41,6 +54,8 @@ int main(int argc, char** argv)
         } else if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc) {
             capturePath = argv[i + 1];
             ++i;
+        } else if (std::strcmp(argv[i], "--instanced") == 0) {
+            drawPath = DRAW_PATH_INSTANCED;
         } else if (std::strcmp(argv[i], "--indirect") == 0) {
             drawPath = DRAW_PATH_INDIRECT;
         } else if (std::strcmp(argv[i], "--far") == 0 && i + 1 < argc) {
@@ -53,6 +68,9 @@ int main(int argc, char** argv)
             interfaceEnabled = false;
         } else if (std::strcmp(argv[i], "--sweep-instances") == 0 && i + 1 < argc) {
             sweepEverySeconds = std::atof(argv[i + 1]);
+            ++i;
+        } else if (std::strcmp(argv[i], "--report") == 0 && i + 1 < argc) {
+            reportPath = argv[i + 1];
             ++i;
         }
     }
@@ -123,6 +141,16 @@ int main(int argc, char** argv)
     bool spaceWasPressed = false;
     double lastSwitchTime = previousTime;
 
+    // 测量报告的累加窗口，跳过起始的预热阶段
+    const double warmUpSeconds = 1.5;
+    double reportWindowStart = 0.0;
+    uint32_t reportFrameCount = 0;
+    double reportCpuCull = 0.0;
+    double reportCpuRecord = 0.0;
+    double reportGpu = 0.0;
+    uint32_t reportVisibleCount = 0;
+    uint32_t reportDrawCallCount = 0;
+
     GpuBuffer captureBuffer = {};
     const bool captureRequested = !capturePath.empty();
     if (captureRequested) {
@@ -152,8 +180,8 @@ int main(int argc, char** argv)
         const bool switchByTimer =
             switchEverySeconds > 0.0 && glfwGetTime() - lastSwitchTime >= switchEverySeconds;
         if ((spaceIsPressed && !spaceWasPressed) || switchByTimer) {
-            uiState.drawPath =
-                uiState.drawPath == DRAW_PATH_TRADITIONAL ? DRAW_PATH_INDIRECT : DRAW_PATH_TRADITIONAL;
+            // 三条路径依次轮换
+            uiState.drawPath = static_cast<DrawPath>((static_cast<int>(uiState.drawPath) + 1) % DRAW_PATH_COUNT);
             lastSwitchTime = glfwGetTime();
             statisticsTime = lastSwitchTime;
             framesSinceStatistics = 0;
@@ -217,6 +245,18 @@ int main(int argc, char** argv)
         uiStatistics.visibleInstanceCount = statistics.visibleInstanceCount;
         uiStatistics.drawCallCount = statistics.drawCallCount;
 
+        if (currentTime - startTime >= warmUpSeconds) {
+            if (reportFrameCount == 0) {
+                reportWindowStart = currentTime;
+            }
+            ++reportFrameCount;
+            reportCpuCull += statistics.cpuCullMilliseconds;
+            reportCpuRecord += statistics.cpuRecordMilliseconds;
+            reportGpu += statistics.gpuMilliseconds;
+            reportVisibleCount = statistics.visibleInstanceCount;
+            reportDrawCallCount = statistics.drawCallCount;
+        }
+
         if (currentTime - statisticsTime >= 0.25) {
             const double frameCount = static_cast<double>(framesSinceStatistics);
             uiStatistics.frameMilliseconds = (currentTime - statisticsTime) * 1000.0 / frameCount;
@@ -226,8 +266,7 @@ int main(int argc, char** argv)
 
             std::printf("%s | instances %u | visible %u | draw commands %u | frame %.2f ms (%.0f FPS) | CPU cull %.3f ms | "
                         "CPU record %.3f ms | GPU %.2f ms\n",
-                        uiState.drawPath == DRAW_PATH_TRADITIONAL ? "traditional drawIndexed"
-                                                                  : "indirect + compute shader culling",
+                        drawPathName(uiState.drawPath),
                         activeInstanceCount, uiStatistics.visibleInstanceCount, uiStatistics.drawCallCount,
                         uiStatistics.frameMilliseconds, 1000.0 / uiStatistics.frameMilliseconds,
                         uiStatistics.cpuCullMilliseconds, uiStatistics.cpuRecordMilliseconds,
@@ -255,6 +294,28 @@ int main(int argc, char** argv)
     std::printf("共提交 %llu 帧, 最后一帧可见实例 %u, 绘制命令 %u\n",
                 static_cast<unsigned long long>(frameCounter), uiStatistics.visibleInstanceCount,
                 uiStatistics.drawCallCount);
+
+    // 测量报告由程序自己写入，不依赖控制台重定向
+    if (!reportPath.empty()) {
+        if (reportFrameCount == 0) {
+            FATAL("测量窗口内没有采集到任何一帧, 请把 --auto-exit 设得比预热时间更长");
+        }
+
+        const double windowSeconds = glfwGetTime() - reportWindowStart;
+        const double frameCount = static_cast<double>(reportFrameCount);
+
+        std::FILE* reportFile = std::fopen(reportPath.c_str(), "a");
+        if (reportFile == nullptr) {
+            FATAL("打开测量报告文件失败: %s", reportPath.c_str());
+        }
+        std::fprintf(reportFile,
+                     "%s\t实例 %u\t可见 %u\t绘制命令 %u\t帧 %.2f ms\t主机剔除 %.3f ms\t"
+                     "主机记录 %.3f ms\t设备 %.2f ms\n",
+                     drawPathName(uiState.drawPath), static_cast<uint32_t>(uiState.activeInstanceCount),
+                     reportVisibleCount, reportDrawCallCount, windowSeconds * 1000.0 / frameCount,
+                     reportCpuCull / frameCount, reportCpuRecord / frameCount, reportGpu / frameCount);
+        std::fclose(reportFile);
+    }
 
     destroyUserInterface(ctx, ui);
     destroyRenderer(ctx, renderer);

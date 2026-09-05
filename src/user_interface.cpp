@@ -14,7 +14,8 @@
 static const char* const TEXT_PANEL_TITLE = "Vulkan Indirect Draw 对比";
 
 static const char* const TEXT_SECTION_PATH = "绘制路径";
-static const char* const TEXT_PATH_TRADITIONAL = "传统 drawIndexed（主机剔除，逐实例一条命令）";
+static const char* const TEXT_PATH_TRADITIONAL = "逐实例 drawIndexed（主机剔除，每个可见实例一条命令）";
+static const char* const TEXT_PATH_INSTANCED = "实例化 drawIndexed（主机剔除，一条命令）";
 static const char* const TEXT_PATH_INDIRECT = "indirect（计算着色器剔除，一条命令）";
 
 static const char* const TEXT_SECTION_SCENE = "场景";
@@ -37,23 +38,23 @@ static const char* const TEXT_DRAW_COMMANDS = "绘制命令 %u 条";
 static const char* const TEXT_SECTION_GUIDE = "操作指南";
 static const char* const TEXT_GUIDE_MOVE = "W A S D 前后左右移动，Q 下降，E 上升";
 static const char* const TEXT_GUIDE_LOOK = "方向键转动视角，按住左 Shift 加速四倍";
-static const char* const TEXT_GUIDE_SWITCH = "空格键切换绘制路径，效果与上面的单选按钮相同";
+static const char* const TEXT_GUIDE_SWITCH = "空格键依次切换三条绘制路径，效果与上面的单选按钮相同";
 static const char* const TEXT_GUIDE_QUIT = "Esc 退出程序";
 static const char* const TEXT_GUIDE_DRAG = "拖动标题栏可以移动本面板";
 
 static const char* const TEXT_EXPLANATION =
-    "两条路径共用同一份着色器与同一套剔除判据，画面完全一致。"
+    "三条路径共用同一份着色器与同一套剔除判据，画面完全一致。"
     "把实例数量或者远裁剪面调大，观察主机剔除与主机记录命令这两项的变化，"
-    "设备时间在两条路径上保持一致。";
+    "设备时间在三条路径上保持一致。";
 
 static const char* const ALL_INTERFACE_TEXTS[] = {
-    TEXT_PANEL_TITLE,      TEXT_SECTION_PATH,       TEXT_PATH_TRADITIONAL, TEXT_PATH_INDIRECT,
-    TEXT_SECTION_SCENE,    TEXT_INSTANCE_COUNT,     TEXT_LIGHT_COUNT,      TEXT_FAR_PLANE,
-    TEXT_MOVE_SPEED,       TEXT_SECTION_TIMING,     TEXT_FRAME_TIME,       TEXT_CPU_CULL_TIME,
-    TEXT_CPU_RECORD_TIME,  TEXT_GPU_TIME,           TEXT_SECTION_WORKLOAD, TEXT_TOTAL_INSTANCES,
-    TEXT_VISIBLE_INSTANCES, TEXT_DRAW_COMMANDS,     TEXT_SECTION_GUIDE,    TEXT_GUIDE_MOVE,
-    TEXT_GUIDE_LOOK,       TEXT_GUIDE_SWITCH,       TEXT_GUIDE_QUIT,       TEXT_GUIDE_DRAG,
-    TEXT_EXPLANATION
+    TEXT_PANEL_TITLE,       TEXT_SECTION_PATH,     TEXT_PATH_TRADITIONAL, TEXT_PATH_INSTANCED,
+    TEXT_PATH_INDIRECT,     TEXT_SECTION_SCENE,    TEXT_INSTANCE_COUNT,   TEXT_LIGHT_COUNT,
+    TEXT_FAR_PLANE,         TEXT_MOVE_SPEED,       TEXT_SECTION_TIMING,   TEXT_FRAME_TIME,
+    TEXT_CPU_CULL_TIME,     TEXT_CPU_RECORD_TIME,  TEXT_GPU_TIME,         TEXT_SECTION_WORKLOAD,
+    TEXT_TOTAL_INSTANCES,   TEXT_VISIBLE_INSTANCES, TEXT_DRAW_COMMANDS,   TEXT_SECTION_GUIDE,
+    TEXT_GUIDE_MOVE,        TEXT_GUIDE_LOOK,       TEXT_GUIDE_SWITCH,     TEXT_GUIDE_QUIT,
+    TEXT_GUIDE_DRAG,        TEXT_EXPLANATION
 };
 
 enum { INTERFACE_TEXT_COUNT = sizeof(ALL_INTERFACE_TEXTS) / sizeof(ALL_INTERFACE_TEXTS[0]) };
@@ -203,10 +204,11 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, int maxI
     ImGui::Begin(TEXT_PANEL_TITLE);
 
     ImGui::SeparatorText(TEXT_SECTION_PATH);
-    int selectedPath = state.drawPath == DRAW_PATH_TRADITIONAL ? 0 : 1;
-    ImGui::RadioButton(TEXT_PATH_TRADITIONAL, &selectedPath, 0);
-    ImGui::RadioButton(TEXT_PATH_INDIRECT, &selectedPath, 1);
-    state.drawPath = selectedPath == 0 ? DRAW_PATH_TRADITIONAL : DRAW_PATH_INDIRECT;
+    int selectedPath = static_cast<int>(state.drawPath);
+    ImGui::RadioButton(TEXT_PATH_TRADITIONAL, &selectedPath, DRAW_PATH_TRADITIONAL);
+    ImGui::RadioButton(TEXT_PATH_INSTANCED, &selectedPath, DRAW_PATH_INSTANCED);
+    ImGui::RadioButton(TEXT_PATH_INDIRECT, &selectedPath, DRAW_PATH_INDIRECT);
+    state.drawPath = static_cast<DrawPath>(selectedPath);
 
     ImGui::SeparatorText(TEXT_SECTION_SCENE);
     ImGui::SliderInt(TEXT_INSTANCE_COUNT, &state.activeInstanceCount, 1, maxInstanceCount, "%d",

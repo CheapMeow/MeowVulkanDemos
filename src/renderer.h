@@ -8,11 +8,14 @@
 
 enum { MAX_FRAMES_IN_FLIGHT = 2 };
 
-// 绘制路径
+// 绘制路径。三条路径共用同一份着色器与同一套剔除判据，差异只在几何的提交方式
 enum DrawPath {
-    DRAW_PATH_TRADITIONAL = 0,  // CPU 剔除 + 逐实例 vkCmdDrawIndexed
-    DRAW_PATH_INDIRECT = 1      // 计算着色器剔除 + 一次 vkCmdDrawIndexedIndirect
+    DRAW_PATH_TRADITIONAL = 0,  // 主机剔除 + 逐可见实例一条 vkCmdDrawIndexed
+    DRAW_PATH_INSTANCED = 1,    // 主机剔除 + 一条 vkCmdDrawIndexed，实例数量为可见数量
+    DRAW_PATH_INDIRECT = 2      // 计算着色器剔除 + 一条 vkCmdDrawIndexedIndirect
 };
+
+enum { DRAW_PATH_COUNT = 3 };
 
 struct GBufferTargets {
     GpuTexture albedoOcclusion;
@@ -112,7 +115,7 @@ struct FrameInput {
     DrawPath drawPath;
     uint32_t activeInstanceCount;
     uint32_t activeLightCount;
-    // 界面绘制数据是否记录到本帧，抓取画面时关闭以便两条路径的结果逐像素可比
+    // 界面绘制数据是否记录到本帧，抓取画面时关闭以便三条路径的结果逐像素可比
     bool drawUserInterface;
     // 非空时把本帧结果拷回该缓冲
     const GpuBuffer* captureBuffer;

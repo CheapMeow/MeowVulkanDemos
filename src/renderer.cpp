@@ -764,18 +764,18 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     std::memcpy(frame.cameraBuffer.mapped, &cameraUniform, sizeof(CameraUniform));
     std::memcpy(frame.lightBuffer.mapped, lights.data(), sizeof(LightData) * input.activeLightCount);
 
-    // 传统路径的剔除在主机上完成，可见列表逐帧写入主机可见内存
+    // 前两条路径的剔除在主机上完成，可见列表逐帧写入主机可见内存
     uint32_t cpuVisibleCount = 0;
     outStatistics.cpuCullMilliseconds = 0.0;
-    if (input.drawPath == DRAW_PATH_TRADITIONAL) {
+    if (input.drawPath == DRAW_PATH_INDIRECT) {
+        // indirect 路径读取上一轮同组资源写回的可见数量，仅用于显示
+        cpuVisibleCount = *static_cast<const uint32_t*>(frame.visibleCountReadbackBuffer.mapped);
+    } else {
         const double cullStart = glfwGetTime();
         cpuVisibleCount = cullInstancesOnCpu(instances, input.activeInstanceCount, cameraUniform.frustumPlanes,
                                              renderer.boundsRadius, visibleIndices);
         std::memcpy(frame.cpuVisibleBuffer.mapped, visibleIndices, sizeof(uint32_t) * cpuVisibleCount);
         outStatistics.cpuCullMilliseconds = (glfwGetTime() - cullStart) * 1000.0;
-    } else {
-        // indirect 路径读取上一轮同组资源写回的可见数量，仅用于显示
-        cpuVisibleCount = *static_cast<const uint32_t*>(frame.visibleCountReadbackBuffer.mapped);
     }
 
     const double recordStart = glfwGetTime();
@@ -863,8 +863,8 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.gbufferPipeline);
 
     VkDescriptorSet gbufferSets[3] = { frame.sceneSet,
-                                       input.drawPath == DRAW_PATH_TRADITIONAL ? frame.cpuVisibleSet
-                                                                               : frame.gpuVisibleSet,
+                                       input.drawPath == DRAW_PATH_INDIRECT ? frame.gpuVisibleSet
+                                                                            : frame.cpuVisibleSet,
                                        renderer.materialSet };
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.gbufferPipelineLayout,
                             0, 3, gbufferSets, 0, nullptr);
@@ -874,11 +874,15 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdBindIndexBuffer(frame.commandBuffer, renderer.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
     if (input.drawPath == DRAW_PATH_TRADITIONAL) {
-        // 每个可见实例记录一条绘制命令
+        // 每个可见实例记录一条绘制命令，可见列表下标由 firstInstance 传入
         for (uint32_t i = 0; i < cpuVisibleCount; ++i) {
             vkCmdDrawIndexed(frame.commandBuffer, renderer.indexCount, 1, 0, 0, i);
         }
         outStatistics.drawCallCount = cpuVisibleCount;
+    } else if (input.drawPath == DRAW_PATH_INSTANCED) {
+        // 全部可见实例合并成一条绘制命令，可见列表下标由 gl_InstanceIndex 提供
+        vkCmdDrawIndexed(frame.commandBuffer, renderer.indexCount, cpuVisibleCount, 0, 0, 0);
+        outStatistics.drawCallCount = 1;
     } else {
         // 实例数量由显存中的绘制命令决定，主机不需要知道可见集合
         vkCmdDrawIndexedIndirect(frame.commandBuffer, frame.indirectBuffer.buffer, 0, 1,
