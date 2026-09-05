@@ -80,16 +80,16 @@ int main(int argc, char** argv)
     lightCapacity = std::max(lightCapacity, initialLightCount);
 
     if (glfwInit() != GLFW_TRUE) {
-        FATAL("glfwInit 失败");
+        FATAL("glfwInit failed");
     }
     if (glfwVulkanSupported() != GLFW_TRUE) {
-        FATAL("当前环境没有可用的 Vulkan 加载器");
+        FATAL("no Vulkan loader is available in this environment");
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     GLFWwindow* window = glfwCreateWindow(1600, 900, "Vulkan Indirect Draw Demo", nullptr, nullptr);
     if (window == nullptr) {
-        FATAL("创建窗口失败");
+        FATAL("failed to create window");
     }
 
     VulkanContext ctx = {};
@@ -291,29 +291,41 @@ int main(int argc, char** argv)
         destroyBuffer(ctx, captureBuffer);
     }
 
-    std::printf("共提交 %llu 帧, 最后一帧可见实例 %u, 绘制命令 %u\n",
+    std::printf("submitted %llu frames, last frame visible %u, draw commands %u\n",
                 static_cast<unsigned long long>(frameCounter), uiStatistics.visibleInstanceCount,
                 uiStatistics.drawCallCount);
 
     // 测量报告由程序自己写入，不依赖控制台重定向
     if (!reportPath.empty()) {
         if (reportFrameCount == 0) {
-            FATAL("测量窗口内没有采集到任何一帧, 请把 --auto-exit 设得比预热时间更长");
+            FATAL("no frame was sampled in the measurement window, set --auto-exit longer than the warm-up time");
         }
 
         const double windowSeconds = glfwGetTime() - reportWindowStart;
         const double frameCount = static_cast<double>(reportFrameCount);
 
+        // 追加写入前判断文件是否为空，为空则先写一行表头
+        std::FILE* probeFile = std::fopen(reportPath.c_str(), "rb");
+        bool needsHeader = true;
+        if (probeFile != nullptr) {
+            std::fseek(probeFile, 0, SEEK_END);
+            needsHeader = std::ftell(probeFile) == 0;
+            std::fclose(probeFile);
+        }
+
         std::FILE* reportFile = std::fopen(reportPath.c_str(), "a");
         if (reportFile == nullptr) {
-            FATAL("打开测量报告文件失败: %s", reportPath.c_str());
+            FATAL("failed to open measurement report file: %s", reportPath.c_str());
         }
-        std::fprintf(reportFile,
-                     "%s\t实例 %u\t可见 %u\t绘制命令 %u\t帧 %.2f ms\t主机剔除 %.3f ms\t"
-                     "主机记录 %.3f ms\t设备 %.2f ms\n",
-                     drawPathName(uiState.drawPath), static_cast<uint32_t>(uiState.activeInstanceCount),
-                     reportVisibleCount, reportDrawCallCount, windowSeconds * 1000.0 / frameCount,
-                     reportCpuCull / frameCount, reportCpuRecord / frameCount, reportGpu / frameCount);
+        if (needsHeader) {
+            std::fprintf(reportFile,
+                         "draw_path,instances,visible_instances,draw_commands,frame_ms,cpu_cull_ms,"
+                         "cpu_record_ms,gpu_ms\n");
+        }
+        std::fprintf(reportFile, "%s,%u,%u,%u,%.3f,%.3f,%.3f,%.3f\n", drawPathName(uiState.drawPath),
+                     static_cast<uint32_t>(uiState.activeInstanceCount), reportVisibleCount,
+                     reportDrawCallCount, windowSeconds * 1000.0 / frameCount, reportCpuCull / frameCount,
+                     reportCpuRecord / frameCount, reportGpu / frameCount);
         std::fclose(reportFile);
     }
 

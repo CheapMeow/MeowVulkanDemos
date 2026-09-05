@@ -10,7 +10,7 @@
     do {                                                                                     \
         VkResult vkCheckResult = (expr);                                                      \
         if (vkCheckResult != VK_SUCCESS) {                                                    \
-            std::fprintf(stderr, "Vulkan 调用失败: %s, 返回值 %d, 位置 %s:%d\n", #expr,       \
+            std::fprintf(stderr, "Vulkan call failed: %s, result %d, at %s:%d\n", #expr,             \
                          static_cast<int>(vkCheckResult), __FILE__, __LINE__);                \
             std::abort();                                                                     \
         }                                                                                     \
@@ -18,7 +18,7 @@
 
 #define FATAL(...)                                        \
     do {                                                  \
-        std::fprintf(stderr, "致命错误: ");               \
+        std::fprintf(stderr, "fatal error: ");            \
         std::fprintf(stderr, __VA_ARGS__);                \
         std::fprintf(stderr, "\n");                       \
         std::abort();                                     \

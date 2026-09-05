@@ -11,7 +11,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugMessengerCallback(
     const VkDebugUtilsMessengerCallbackDataEXT* callbackData,
     void* /*userData*/)
 {
-    std::fprintf(stderr, "[验证层] %s\n", callbackData->pMessage);
+    std::fprintf(stderr, "[validation] %s\n", callbackData->pMessage);
     if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
         std::abort();
     }
@@ -23,7 +23,7 @@ static void createInstance(VulkanContext& ctx, bool enableValidation)
     uint32_t glfwExtensionCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     if (glfwExtensions == nullptr) {
-        FATAL("无法取得 GLFW 需要的实例扩展列表");
+        FATAL("cannot obtain the instance extensions required by GLFW");
     }
 
     std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
@@ -59,7 +59,7 @@ static void createInstance(VulkanContext& ctx, bool enableValidation)
             reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
                 vkGetInstanceProcAddr(ctx.instance, "vkCreateDebugUtilsMessengerEXT"));
         if (createMessenger == nullptr) {
-            FATAL("找不到 vkCreateDebugUtilsMessengerEXT 入口");
+            FATAL("entry point vkCreateDebugUtilsMessengerEXT not found");
         }
 
         VkDebugUtilsMessengerCreateInfoEXT messengerInfo = {};
@@ -79,7 +79,7 @@ static void pickPhysicalDevice(VulkanContext& ctx)
     uint32_t deviceCount = 0;
     VK_CHECK(vkEnumeratePhysicalDevices(ctx.instance, &deviceCount, nullptr));
     if (deviceCount == 0) {
-        FATAL("没有找到支持 Vulkan 的物理设备");
+        FATAL("no physical device with Vulkan support was found");
     }
 
     std::vector<VkPhysicalDevice> devices(deviceCount);
@@ -122,7 +122,7 @@ static void pickPhysicalDevice(VulkanContext& ctx)
     }
 
     if (chosen == VK_NULL_HANDLE) {
-        FATAL("没有物理设备同时支持图形、计算与画面呈现");
+        FATAL("no physical device supports graphics, compute and presentation at the same time");
     }
 
     ctx.physicalDevice = chosen;
@@ -130,7 +130,7 @@ static void pickPhysicalDevice(VulkanContext& ctx)
     vkGetPhysicalDeviceProperties(ctx.physicalDevice, &ctx.physicalDeviceProperties);
     vkGetPhysicalDeviceMemoryProperties(ctx.physicalDevice, &ctx.memoryProperties);
 
-    std::printf("使用物理设备: %s\n", ctx.physicalDeviceProperties.deviceName);
+    std::printf("physical device: %s\n", ctx.physicalDeviceProperties.deviceName);
 }
 
 static void createLogicalDevice(VulkanContext& ctx)
@@ -270,7 +270,7 @@ void createSwapchain(VulkanContext& ctx)
     uint32_t actualImageCount = 0;
     VK_CHECK(vkGetSwapchainImagesKHR(ctx.device, ctx.swapchain, &actualImageCount, nullptr));
     if (actualImageCount > MAX_SWAPCHAIN_IMAGES) {
-        FATAL("交换链图像数量 %u 超过上限", actualImageCount);
+        FATAL("swapchain image count %u exceeds the upper limit", actualImageCount);
     }
     VK_CHECK(vkGetSwapchainImagesKHR(ctx.device, ctx.swapchain, &actualImageCount, ctx.swapchainImages));
     ctx.swapchainImageCount = actualImageCount;
@@ -287,8 +287,8 @@ void createSwapchain(VulkanContext& ctx)
         VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, &ctx.swapchainImageViews[i]));
     }
 
-    std::printf("交换链: %ux%u, 图像数量 %u, 呈现模式 %d\n", extent.width, extent.height, actualImageCount,
-                static_cast<int>(chosenPresentMode));
+    std::printf("swapchain: %ux%u, image count %u, present mode %d\n", extent.width, extent.height,
+                actualImageCount, static_cast<int>(chosenPresentMode));
 }
 
 void destroySwapchain(VulkanContext& ctx)
@@ -310,5 +310,5 @@ uint32_t findMemoryType(const VulkanContext& ctx, uint32_t typeBits, VkMemoryPro
             return i;
         }
     }
-    FATAL("找不到满足要求的内存类型");
+    FATAL("no memory type satisfies the requested properties");
 }

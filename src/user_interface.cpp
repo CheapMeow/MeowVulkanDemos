@@ -65,7 +65,7 @@ static ImVector<ImWchar> gGlyphRanges;
 static void checkImGuiResult(VkResult result)
 {
     if (result != VK_SUCCESS) {
-        FATAL("imgui 的 Vulkan 调用失败");
+        FATAL("imgui Vulkan call failed");
     }
 }
 
@@ -86,12 +86,12 @@ static GlyphUsage verifyGlyphsPresent(ImFont* font)
             unsigned int codepoint = 0;
             const int consumedBytes = ImTextCharFromUtf8(&codepoint, cursor, nullptr);
             if (consumedBytes == 0) {
-                FATAL("界面文本的字符编码无法解析");
+                FATAL("cannot decode the character encoding of the interface text");
             }
             cursor += consumedBytes;
 
             if (font->FindGlyphNoFallback(static_cast<ImWchar>(codepoint)) == nullptr) {
-                FATAL("字体缺少界面文本需要的字形, 码点 U+%04X", codepoint);
+                FATAL("font lacks a glyph required by the interface text, code point U+%04X", codepoint);
             }
 
             if (codepoint >= 0x4E00 && codepoint <= 0x9FFF) {
@@ -141,7 +141,7 @@ void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, Use
     ImFont* font =
         io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/msyh.ttc", 18.0f, &fontConfig, gGlyphRanges.Data);
     if (font == nullptr) {
-        FATAL("加载字体 C:/Windows/Fonts/msyh.ttc 失败");
+        FATAL("failed to load font C:/Windows/Fonts/msyh.ttc");
     }
 
     ImGui::StyleColorsDark();
@@ -152,7 +152,7 @@ void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, Use
     style.ItemSpacing = ImVec2(8.0f, 7.0f);
 
     if (!ImGui_ImplGlfw_InitForVulkan(ctx.window, true)) {
-        FATAL("初始化 imgui 的 GLFW 后端失败");
+        FATAL("failed to initialize the imgui GLFW backend");
     }
 
     ImGui_ImplVulkan_InitInfo initInfo = {};
@@ -170,14 +170,15 @@ void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, Use
     initInfo.Subpass = 0;
     initInfo.CheckVkResultFn = checkImGuiResult;
     if (!ImGui_ImplVulkan_Init(&initInfo)) {
-        FATAL("初始化 imgui 的 Vulkan 后端失败");
+        FATAL("failed to initialize the imgui Vulkan backend");
     }
     if (!ImGui_ImplVulkan_CreateFontsTexture()) {
-        FATAL("创建 imgui 字体纹理失败");
+        FATAL("failed to create the imgui font texture");
     }
 
     const GlyphUsage usage = verifyGlyphsPresent(font);
-    std::printf("界面字体 msyh.ttc: 载入字形 %d 个, 界面文本用到汉字 %d 处与全角标点 %d 处, 全部命中\n",
+    std::printf("interface font msyh.ttc: %d glyphs loaded, interface text uses %d ideographs and %d full-width "
+                "punctuation marks, all present\n",
                 font->Glyphs.Size, usage.ideographCount, usage.punctuationCount);
 }
 

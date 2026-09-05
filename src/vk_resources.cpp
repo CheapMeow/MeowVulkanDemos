@@ -125,7 +125,7 @@ void createTextureFromFile(const VulkanContext& ctx, const std::string& path, bo
     int channels = 0;
     stbi_uc* pixels = stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
     if (pixels == nullptr) {
-        FATAL("加载纹理 %s 失败: %s", path.c_str(), stbi_failure_reason());
+        FATAL("failed to load texture %s: %s", path.c_str(), stbi_failure_reason());
     }
 
     outTexture = GpuTexture();
@@ -247,7 +247,7 @@ void createTextureFromFile(const VulkanContext& ctx, const std::string& path, bo
     viewInfo.subresourceRange.layerCount = 1;
     VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, &outTexture.view));
 
-    std::printf("加载纹理 %s: %ux%u, 多级渐远层数 %u\n", path.c_str(), outTexture.width, outTexture.height,
+    std::printf("loaded texture %s: %ux%u, mip levels %u\n", path.c_str(), outTexture.width, outTexture.height,
                 mipLevels);
 }
 
@@ -329,7 +329,7 @@ VkShaderModule loadShaderModule(const VulkanContext& ctx, const std::string& spi
 {
     std::FILE* file = std::fopen(spirvPath.c_str(), "rb");
     if (file == nullptr) {
-        FATAL("打不开着色器文件 %s", spirvPath.c_str());
+        FATAL("cannot open shader file %s", spirvPath.c_str());
     }
     std::fseek(file, 0, SEEK_END);
     const long size = std::ftell(file);
@@ -339,7 +339,7 @@ VkShaderModule loadShaderModule(const VulkanContext& ctx, const std::string& spi
     const size_t readBytes = std::fread(code.data(), 1, static_cast<size_t>(size), file);
     std::fclose(file);
     if (readBytes != static_cast<size_t>(size)) {
-        FATAL("读取着色器文件 %s 不完整", spirvPath.c_str());
+        FATAL("incomplete read of shader file %s", spirvPath.c_str());
     }
 
     VkShaderModuleCreateInfo moduleInfo = {};

@@ -12,7 +12,7 @@ static void readWholeFile(const std::string& path, std::vector<char>& outBytes)
 {
     std::FILE* file = std::fopen(path.c_str(), "rb");
     if (file == nullptr) {
-        FATAL("打不开文件 %s", path.c_str());
+        FATAL("cannot open file %s", path.c_str());
     }
     std::fseek(file, 0, SEEK_END);
     const long size = std::ftell(file);
@@ -21,7 +21,7 @@ static void readWholeFile(const std::string& path, std::vector<char>& outBytes)
     outBytes.resize(static_cast<size_t>(size) + 1);
     const size_t readBytes = std::fread(outBytes.data(), 1, static_cast<size_t>(size), file);
     if (readBytes != static_cast<size_t>(size)) {
-        FATAL("读取文件 %s 不完整", path.c_str());
+        FATAL("incomplete read of file %s", path.c_str());
     }
     outBytes[static_cast<size_t>(size)] = '\0';
     std::fclose(file);
@@ -41,7 +41,7 @@ static void parseFaceVertex(const char*& cursor, int& outPosition, int& outUv, i
     char* next = nullptr;
     outPosition = static_cast<int>(std::strtol(cursor, &next, 10));
     if (next == cursor) {
-        FATAL("obj 面数据缺少位置索引");
+        FATAL("obj face data has no position index");
     }
     cursor = next;
 
@@ -67,7 +67,7 @@ static int resolveIndex(int rawIndex, size_t count)
     if (rawIndex < 0) {
         return static_cast<int>(count) + rawIndex;
     }
-    FATAL("obj 索引为 0，不符合规范");
+    FATAL("obj index is 0, which violates the format specification");
 }
 
 void loadObj(const std::string& path, MeshData& outMesh)
@@ -139,7 +139,7 @@ void loadObj(const std::string& path, MeshData& outMesh)
                 parseFaceVertex(faceCursor, rawPosition, rawUv, rawNormal);
 
                 if (rawUv == 0 || rawNormal == 0) {
-                    FATAL("obj 面缺少纹理坐标或法线，当前解析器要求三者齐备");
+                    FATAL("obj face lacks texture coordinate or normal, this parser requires all three");
                 }
 
                 const int positionIndex = resolveIndex(rawPosition, positions.size());
@@ -178,7 +178,7 @@ void loadObj(const std::string& path, MeshData& outMesh)
     }
 
     if (outMesh.vertices.empty() || outMesh.indices.empty()) {
-        FATAL("obj 文件 %s 没有解析出几何数据", path.c_str());
+        FATAL("obj file %s produced no geometry", path.c_str());
     }
 
     glm::vec3 minCorner = outMesh.vertices[0].position;
@@ -205,7 +205,7 @@ void loadObj(const std::string& path, MeshData& outMesh)
     }
     outMesh.boundsRadius = std::sqrt(maxDistanceSquared);
 
-    std::printf("加载 %s: 顶点 %zu, 索引 %zu, 三角形 %zu, 包围球半径 %.4f\n", path.c_str(),
+    std::printf("loaded %s: vertices %zu, indices %zu, triangles %zu, bounds radius %.4f\n", path.c_str(),
                 outMesh.vertices.size(), outMesh.indices.size(), outMesh.indices.size() / 3,
                 outMesh.boundsRadius);
 }

@@ -19,12 +19,12 @@ void configureConsoleEncoding()
     }
 
     if (SetConsoleOutputCP(CP_UTF8) == 0) {
-        std::fprintf(stderr, "切换控制台输出代码页到 UTF-8 失败, 错误码 %lu\n", GetLastError());
+        std::fprintf(stderr, "failed to switch console output code page to UTF-8, error %lu\n", GetLastError());
         return;
     }
 
     gPreviousOutputCodePage = currentCodePage;
-    std::printf("控制台输出代码页由 %u 切换到 65001 (UTF-8)\n", currentCodePage);
+    std::printf("console output code page switched from %u to 65001 (UTF-8)\n", currentCodePage);
 }
 
 void restoreConsoleEncoding()

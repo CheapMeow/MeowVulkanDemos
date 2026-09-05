@@ -74,7 +74,8 @@ void writeCaptureBufferToPng(const VulkanContext& ctx, const GpuBuffer& buffer, 
     const double geometryAverageLuminance =
         geometryPixelCount > 0 ? geometryLuminanceSum / static_cast<double>(geometryPixelCount) : 0.0;
 
-    std::printf("抓取画面 %s: 几何覆盖率 %.2f%%, 几何像素平均亮度 %.2f, 全图平均亮度 %.2f, 最大通道值 %u\n",
+    std::printf("captured %s: geometry coverage %.2f%%, geometry mean luminance %.2f, image mean luminance %.2f, "
+                "max channel %u\n",
                 pngPath.c_str(),
                 100.0 * static_cast<double>(geometryPixelCount) / static_cast<double>(pixelCount),
                 geometryAverageLuminance, luminanceSum / static_cast<double>(pixelCount),
@@ -82,6 +83,6 @@ void writeCaptureBufferToPng(const VulkanContext& ctx, const GpuBuffer& buffer, 
 
     if (stbi_write_png(pngPath.c_str(), static_cast<int>(width), static_cast<int>(height), 4, rgbaPixels.data(),
                        static_cast<int>(width) * 4) == 0) {
-        FATAL("写出 PNG 文件 %s 失败", pngPath.c_str());
+        FATAL("failed to write PNG file %s", pngPath.c_str());
     }
 }
