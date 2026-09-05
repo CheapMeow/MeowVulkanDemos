@@ -224,10 +224,10 @@ int main(int argc, char** argv)
             uiStatistics.cpuRecordMilliseconds = accumulatedCpuRecord / frameCount;
             uiStatistics.gpuMilliseconds = accumulatedGpu / frameCount;
 
-            std::printf("%s | 实例 %u | 可见 %u | 绘制命令 %u | 帧 %.2f ms (%.0f FPS) | 主机剔除 %.3f ms | "
-                        "主机记录 %.3f ms | 设备 %.2f ms\n",
-                        uiState.drawPath == DRAW_PATH_TRADITIONAL ? "传统 drawIndexed"
-                                                                  : "indirect + 计算着色器剔除",
+            std::printf("%s | instances %u | visible %u | draw commands %u | frame %.2f ms (%.0f FPS) | CPU cull %.3f ms | "
+                        "CPU record %.3f ms | GPU %.2f ms\n",
+                        uiState.drawPath == DRAW_PATH_TRADITIONAL ? "traditional drawIndexed"
+                                                                  : "indirect + compute shader culling",
                         activeInstanceCount, uiStatistics.visibleInstanceCount, uiStatistics.drawCallCount,
                         uiStatistics.frameMilliseconds, 1000.0 / uiStatistics.frameMilliseconds,
                         uiStatistics.cpuCullMilliseconds, uiStatistics.cpuRecordMilliseconds,
