@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gpu_clock_lock.h"
 #include "renderer.h"
 #include "vk_context.h"
 
@@ -33,7 +34,8 @@ void destroyUserInterface(const VulkanContext& ctx, UserInterface& ui);
 
 // 开始一帧界面，随后构建控件
 void beginUserInterfaceFrame();
-void buildUserInterface(UiState& state, const UiStatistics& statistics, int maxInstanceCount, int maxLightCount);
+void buildUserInterface(UiState& state, const UiStatistics& statistics, int maxInstanceCount, int maxLightCount,
+                        GpuClockLockState& gpuClockLockState);
 // 结束一帧界面，把控件转成绘制数据
 void endUserInterfaceFrame();
 

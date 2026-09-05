@@ -24,6 +24,7 @@ set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui")
 add_executable(VulkanIndirectDrawDemo
     src/main.cpp
     src/console.cpp
+    src/gpu_clock_lock.cpp
     src/vk_context.cpp
     src/vk_resources.cpp
     src/obj_loader.cpp
