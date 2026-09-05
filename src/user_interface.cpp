@@ -43,6 +43,19 @@ static const char* const TEXT_GUIDE_SWITCH = "空格键依次切换三条绘制�
 static const char* const TEXT_GUIDE_QUIT = "Esc 退出程序";
 static const char* const TEXT_GUIDE_DRAG = "拖动标题栏可以移动本面板";
 
+static const char* const TEXT_SECTION_GPU_LOCK = "GPU 锁频";
+static const char* const TEXT_GPU_NOT_DETECTED = "未探测到支持锁频的 NVIDIA 显卡：%s";
+static const char* const TEXT_GPU_DEVICE_NAME = "显卡 %s（设备 #%u）";
+static const char* const TEXT_GPU_CURRENT_CLOCKS = "当前频率：核心 %u MHz，显存 %u MHz";
+static const char* const TEXT_GPU_TARGET_CORE = "目标核心频率";
+static const char* const TEXT_GPU_TARGET_MEMORY = "目标显存频率";
+static const char* const TEXT_GPU_LOCK_BUTTON = "锁频";
+static const char* const TEXT_GPU_UNLOCK_BUTTON = "解锁";
+static const char* const TEXT_GPU_LOCKED_STATUS = "已锁定：核心 %u MHz，显存 %u MHz";
+static const char* const TEXT_GPU_NOT_LOCKED_STATUS = "未锁定，自动调频";
+static const char* const TEXT_GPU_LOCK_FAILED = "锁频失败，消费级显卡常见拒绝 -lgc/-lmc，或者需要以管理员身份运行本程序：%s";
+static const char* const TEXT_GPU_UNLOCK_FAILED = "解锁失败：%s";
+
 static const char* const TEXT_EXPLANATION =
     "三条路径共用同一份着色器与同一套剔除判据，画面完全一致。"
     "把实例数量或者远裁剪面调大，观察主机剔除与主机记录命令这两项的变化，"
@@ -56,6 +69,9 @@ static const char* const ALL_INTERFACE_TEXTS[] = {
     TEXT_VISIBLE_INSTANCES,   TEXT_DRAW_COMMANDS,       TEXT_SECTION_GUIDE,         TEXT_GUIDE_MOVE,
     TEXT_GUIDE_LOOK,          TEXT_GUIDE_SWITCH,        TEXT_GUIDE_QUIT,            TEXT_GUIDE_DRAG,
     TEXT_EXPLANATION,
+    TEXT_SECTION_GPU_LOCK,    TEXT_GPU_NOT_DETECTED,    TEXT_GPU_DEVICE_NAME,       TEXT_GPU_CURRENT_CLOCKS,
+    TEXT_GPU_TARGET_CORE,     TEXT_GPU_TARGET_MEMORY,   TEXT_GPU_LOCK_BUTTON,       TEXT_GPU_UNLOCK_BUTTON,
+    TEXT_GPU_LOCKED_STATUS,   TEXT_GPU_NOT_LOCKED_STATUS, TEXT_GPU_LOCK_FAILED,     TEXT_GPU_UNLOCK_FAILED,
     timingDisplayName(TIMING_FRAME),
     timingDisplayName(TIMING_CPU_CULL),
     timingDisplayName(TIMING_CPU_RECORD_BEGIN),
@@ -212,7 +228,7 @@ void beginUserInterfaceFrame()
 }
 
 void buildUserInterface(UiState& state, const UiStatistics& statistics, const TimingStore& timing,
-                        int maxInstanceCount, int maxLightCount)
+                        int maxInstanceCount, int maxLightCount, GpuClockLockState& gpuClockLockState)
 {
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(520.0f, 860.0f), ImGuiCond_FirstUseEver);
@@ -231,6 +247,78 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
     ImGui::SliderInt(TEXT_LIGHT_COUNT, &state.activeLightCount, 1, maxLightCount);
     ImGui::SliderFloat(TEXT_FAR_PLANE, &state.farPlane, 40.0f, 900.0f, "%.0f");
     ImGui::SliderFloat(TEXT_MOVE_SPEED, &state.cameraMoveSpeed, 5.0f, 400.0f, "%.0f");
+
+    ImGui::SeparatorText(TEXT_SECTION_GPU_LOCK);
+    if (!gpuClockLockState.detected) {
+        ImGui::TextWrapped(TEXT_GPU_NOT_DETECTED, gpuClockLockState.lastActionDetail.c_str());
+    } else {
+        ImGui::Text(TEXT_GPU_DEVICE_NAME, gpuClockLockState.gpuName.c_str(), gpuClockLockState.gpuIndex);
+        ImGui::Text(TEXT_GPU_CURRENT_CLOCKS, gpuClockLockState.currentCoreClockMHz,
+                    gpuClockLockState.currentMemoryClockMHz);
+
+        char comboLabel[32];
+
+        ImGui::BeginDisabled(gpuClockLockState.locked);
+
+        std::snprintf(comboLabel, sizeof(comboLabel), "%u MHz",
+                      gpuClockLockState.supportedCoreClocksMHz[gpuClockLockState.selectedCoreClockIndex]);
+        if (ImGui::BeginCombo(TEXT_GPU_TARGET_CORE, comboLabel)) {
+            for (int i = 0; i < static_cast<int>(gpuClockLockState.supportedCoreClocksMHz.size()); ++i) {
+                const bool selected = i == gpuClockLockState.selectedCoreClockIndex;
+                char itemLabel[32];
+                std::snprintf(itemLabel, sizeof(itemLabel), "%u MHz", gpuClockLockState.supportedCoreClocksMHz[i]);
+                if (ImGui::Selectable(itemLabel, selected)) {
+                    gpuClockLockState.selectedCoreClockIndex = i;
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        std::snprintf(comboLabel, sizeof(comboLabel), "%u MHz",
+                      gpuClockLockState.supportedMemoryClocksMHz[gpuClockLockState.selectedMemoryClockIndex]);
+        if (ImGui::BeginCombo(TEXT_GPU_TARGET_MEMORY, comboLabel)) {
+            for (int i = 0; i < static_cast<int>(gpuClockLockState.supportedMemoryClocksMHz.size()); ++i) {
+                const bool selected = i == gpuClockLockState.selectedMemoryClockIndex;
+                char itemLabel[32];
+                std::snprintf(itemLabel, sizeof(itemLabel), "%u MHz",
+                             gpuClockLockState.supportedMemoryClocksMHz[i]);
+                if (ImGui::Selectable(itemLabel, selected)) {
+                    gpuClockLockState.selectedMemoryClockIndex = i;
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (ImGui::Button(TEXT_GPU_LOCK_BUTTON)) {
+            requestLockGpuClocks(gpuClockLockState);
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+
+        ImGui::BeginDisabled(!gpuClockLockState.locked);
+        if (ImGui::Button(TEXT_GPU_UNLOCK_BUTTON)) {
+            requestUnlockGpuClocks(gpuClockLockState);
+        }
+        ImGui::EndDisabled();
+
+        if (gpuClockLockState.lastAction == GpuClockLockAction::kLockFailed) {
+            ImGui::TextWrapped(TEXT_GPU_LOCK_FAILED, gpuClockLockState.lastActionDetail.c_str());
+        } else if (gpuClockLockState.lastAction == GpuClockLockAction::kUnlockFailed) {
+            ImGui::TextWrapped(TEXT_GPU_UNLOCK_FAILED, gpuClockLockState.lastActionDetail.c_str());
+        } else if (gpuClockLockState.locked) {
+            ImGui::Text(TEXT_GPU_LOCKED_STATUS, gpuClockLockState.lockedCoreClockMHz,
+                        gpuClockLockState.lockedMemoryClockMHz);
+        } else {
+            ImGui::TextUnformatted(TEXT_GPU_NOT_LOCKED_STATUS);
+        }
+    }
 
     ImGui::SeparatorText(TEXT_SECTION_TIMING);
     ImGui::TextWrapped("%s", TEXT_TIMING_HINT);

@@ -1,5 +1,6 @@
 #include "console.h"
 #include "frame_capture.h"
+#include "gpu_clock_lock.h"
 #include "obj_loader.h"
 #include "renderer.h"
 #include "scene.h"
@@ -75,6 +76,10 @@ int main(int argc, char** argv)
             ++i;
         }
     }
+
+    // 与 Vulkan、窗口无关，尽早探测，探测不到就在面板里如实显示，不阻止程序继续运行
+    GpuClockLockState gpuClockLockState;
+    detectGpuClockLockState(gpuClockLockState);
 
     // 缓冲按容量分配，界面上滑动实例数量时不需要重建任何资源
     const uint32_t instanceCapacity = std::max(1000000u, initialInstanceCount);
@@ -156,8 +161,9 @@ int main(int argc, char** argv)
 
         if (interfaceEnabled) {
             beginUserInterfaceFrame();
+            pollLiveGpuClocks(gpuClockLockState, glfwGetTime());
             buildUserInterface(uiState, uiStatistics, timingStore, static_cast<int>(instanceCapacity),
-                               static_cast<int>(lightCapacity));
+                               static_cast<int>(lightCapacity), gpuClockLockState);
         }
 
         const bool keyboardGoesToInterface = interfaceEnabled && userInterfaceWantsKeyboard();
@@ -328,6 +334,8 @@ int main(int argc, char** argv)
 
     glfwDestroyWindow(window);
     glfwTerminate();
+
+    releaseGpuClockLockOnExit(gpuClockLockState);
 
     restoreConsoleEncoding();
     return EXIT_SUCCESS;
