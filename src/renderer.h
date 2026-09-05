@@ -97,10 +97,16 @@ struct Renderer {
     FrameResources frames[MAX_FRAMES_IN_FLIGHT];
 };
 
-// 一帧的耗时与工作量统计
+// 一帧的耗时与工作量统计，命令缓冲记录过程按功能步骤拆分成独立的耗时项
 struct FrameStatistics {
     double cpuCullMilliseconds;
-    double cpuRecordMilliseconds;
+    double cpuRecordBeginMilliseconds;
+    double cpuRecordCullDispatchMilliseconds;
+    double cpuRecordGBufferPassMilliseconds;
+    double cpuRecordLightingPassMilliseconds;
+    double cpuRecordUiMilliseconds;
+    double cpuRecordCaptureMilliseconds;
+    double cpuRecordSubmitMilliseconds;
     double gpuMilliseconds;
     uint32_t drawCallCount;
     uint32_t visibleInstanceCount;

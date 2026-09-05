@@ -20,6 +20,7 @@ set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/glfw)
 
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui")
+set(IMPLOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/implot")
 
 add_executable(VulkanIndirectDrawDemo
     src/main.cpp
@@ -29,6 +30,7 @@ add_executable(VulkanIndirectDrawDemo
     src/obj_loader.cpp
     src/scene.cpp
     src/renderer.cpp
+    src/timing.cpp
     src/user_interface.cpp
     src/frame_capture.cpp
     src/stb_image_impl.cpp
@@ -39,6 +41,8 @@ add_executable(VulkanIndirectDrawDemo
     "${IMGUI_DIR}/imgui_widgets.cpp"
     "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
     "${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp"
+    "${IMPLOT_DIR}/implot.cpp"
+    "${IMPLOT_DIR}/implot_items.cpp"
 )
 
 set(SHADER_SOURCES
@@ -78,6 +82,7 @@ target_include_directories(VulkanIndirectDrawDemo PRIVATE
     external/stb
     "${IMGUI_DIR}"
     "${IMGUI_DIR}/backends"
+    "${IMPLOT_DIR}"
     src
 )
 

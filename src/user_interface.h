@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer.h"
+#include "timing.h"
 #include "vk_context.h"
 
 #include <cstdint>
@@ -14,12 +15,8 @@ struct UiState {
     float cameraMoveSpeed;
 };
 
-// 界面上显示的统计量，均为统计窗口内的平均值
+// 界面上显示的本帧工作量，耗时统计改由 TimingStore 提供
 struct UiStatistics {
-    double frameMilliseconds;
-    double cpuCullMilliseconds;
-    double cpuRecordMilliseconds;
-    double gpuMilliseconds;
     uint32_t visibleInstanceCount;
     uint32_t drawCallCount;
 };
@@ -33,7 +30,8 @@ void destroyUserInterface(const VulkanContext& ctx, UserInterface& ui);
 
 // 开始一帧界面，随后构建控件
 void beginUserInterfaceFrame();
-void buildUserInterface(UiState& state, const UiStatistics& statistics, int maxInstanceCount, int maxLightCount);
+void buildUserInterface(UiState& state, const UiStatistics& statistics, const TimingStore& timing,
+                        int maxInstanceCount, int maxLightCount);
 // 结束一帧界面，把控件转成绘制数据
 void endUserInterfaceFrame();
 

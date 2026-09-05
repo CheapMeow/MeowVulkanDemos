@@ -3,6 +3,7 @@
 #include "obj_loader.h"
 #include "renderer.h"
 #include "scene.h"
+#include "timing.h"
 #include "user_interface.h"
 #include "vk_check.h"
 #include "vk_context.h"
@@ -129,25 +130,17 @@ int main(int argc, char** argv)
 
     uint64_t frameCounter = 0;
     double previousTime = glfwGetTime();
-    double statisticsTime = previousTime;
+    double lastPrintTime = previousTime;
     const double startTime = previousTime;
-    uint32_t framesSinceStatistics = 0;
 
-    // 统计量按窗口累加，每隔一段时间取平均后送进界面
-    double accumulatedCpuCull = 0.0;
-    double accumulatedCpuRecord = 0.0;
-    double accumulatedGpu = 0.0;
+    TimingStore timingStore;
+    initTimingStore(timingStore, startTime);
 
     bool spaceWasPressed = false;
     double lastSwitchTime = previousTime;
 
-    // 测量报告的累加窗口，跳过起始的预热阶段
+    // 测量报告跳过起始的预热阶段，只统计预热结束之后到程序退出的样本
     const double warmUpSeconds = 1.5;
-    double reportWindowStart = 0.0;
-    uint32_t reportFrameCount = 0;
-    double reportCpuCull = 0.0;
-    double reportCpuRecord = 0.0;
-    double reportGpu = 0.0;
     uint32_t reportVisibleCount = 0;
     uint32_t reportDrawCallCount = 0;
 
@@ -163,7 +156,7 @@ int main(int argc, char** argv)
 
         if (interfaceEnabled) {
             beginUserInterfaceFrame();
-            buildUserInterface(uiState, uiStatistics, static_cast<int>(instanceCapacity),
+            buildUserInterface(uiState, uiStatistics, timingStore, static_cast<int>(instanceCapacity),
                                static_cast<int>(lightCapacity));
         }
 
@@ -183,11 +176,7 @@ int main(int argc, char** argv)
             // 三条路径依次轮换
             uiState.drawPath = static_cast<DrawPath>((static_cast<int>(uiState.drawPath) + 1) % DRAW_PATH_COUNT);
             lastSwitchTime = glfwGetTime();
-            statisticsTime = lastSwitchTime;
-            framesSinceStatistics = 0;
-            accumulatedCpuCull = 0.0;
-            accumulatedCpuRecord = 0.0;
-            accumulatedGpu = 0.0;
+            resetTimingWindows(timingStore);
         }
         spaceWasPressed = spaceIsPressed;
 
@@ -237,46 +226,46 @@ int main(int argc, char** argv)
             captureDone = true;
         }
         ++frameCounter;
-        ++framesSinceStatistics;
 
-        accumulatedCpuCull += statistics.cpuCullMilliseconds;
-        accumulatedCpuRecord += statistics.cpuRecordMilliseconds;
-        accumulatedGpu += statistics.gpuMilliseconds;
         uiStatistics.visibleInstanceCount = statistics.visibleInstanceCount;
         uiStatistics.drawCallCount = statistics.drawCallCount;
 
-        if (currentTime - startTime >= warmUpSeconds) {
-            if (reportFrameCount == 0) {
-                reportWindowStart = currentTime;
-            }
-            ++reportFrameCount;
-            reportCpuCull += statistics.cpuCullMilliseconds;
-            reportCpuRecord += statistics.cpuRecordMilliseconds;
-            reportGpu += statistics.gpuMilliseconds;
+        const bool includeInReport = currentTime - startTime >= warmUpSeconds;
+        if (includeInReport) {
             reportVisibleCount = statistics.visibleInstanceCount;
             reportDrawCallCount = statistics.drawCallCount;
         }
 
-        if (currentTime - statisticsTime >= 0.25) {
-            const double frameCount = static_cast<double>(framesSinceStatistics);
-            uiStatistics.frameMilliseconds = (currentTime - statisticsTime) * 1000.0 / frameCount;
-            uiStatistics.cpuCullMilliseconds = accumulatedCpuCull / frameCount;
-            uiStatistics.cpuRecordMilliseconds = accumulatedCpuRecord / frameCount;
-            uiStatistics.gpuMilliseconds = accumulatedGpu / frameCount;
+        // 按 TimingId 的顺序填满全部计时项，新增计时项时只需要在这里补一行
+        double timingValues[TIMING_ID_COUNT];
+        timingValues[TIMING_FRAME] = static_cast<double>(deltaSeconds) * 1000.0;
+        timingValues[TIMING_CPU_CULL] = statistics.cpuCullMilliseconds;
+        timingValues[TIMING_CPU_RECORD_BEGIN] = statistics.cpuRecordBeginMilliseconds;
+        timingValues[TIMING_CPU_RECORD_CULL_DISPATCH] = statistics.cpuRecordCullDispatchMilliseconds;
+        timingValues[TIMING_CPU_RECORD_GBUFFER_PASS] = statistics.cpuRecordGBufferPassMilliseconds;
+        timingValues[TIMING_CPU_RECORD_LIGHTING_PASS] = statistics.cpuRecordLightingPassMilliseconds;
+        timingValues[TIMING_CPU_RECORD_UI] = statistics.cpuRecordUiMilliseconds;
+        timingValues[TIMING_CPU_RECORD_CAPTURE] = statistics.cpuRecordCaptureMilliseconds;
+        timingValues[TIMING_CPU_RECORD_SUBMIT] = statistics.cpuRecordSubmitMilliseconds;
+        timingValues[TIMING_GPU_TOTAL] = statistics.gpuMilliseconds;
+        recordFrameTimingSamples(timingStore, currentTime, includeInReport, timingValues);
 
-            std::printf("%s | instances %u | visible %u | draw commands %u | frame %.2f ms (%.0f FPS) | CPU cull %.3f ms | "
-                        "CPU record %.3f ms | GPU %.2f ms\n",
-                        drawPathName(uiState.drawPath),
-                        activeInstanceCount, uiStatistics.visibleInstanceCount, uiStatistics.drawCallCount,
-                        uiStatistics.frameMilliseconds, 1000.0 / uiStatistics.frameMilliseconds,
-                        uiStatistics.cpuCullMilliseconds, uiStatistics.cpuRecordMilliseconds,
-                        uiStatistics.gpuMilliseconds);
-
-            statisticsTime = currentTime;
-            framesSinceStatistics = 0;
-            accumulatedCpuCull = 0.0;
-            accumulatedCpuRecord = 0.0;
-            accumulatedGpu = 0.0;
+        if (currentTime - lastPrintTime >= 0.25) {
+            std::printf("%s | instances %u | visible %u | draw commands %u\n", drawPathName(uiState.drawPath),
+                        activeInstanceCount, uiStatistics.visibleInstanceCount, uiStatistics.drawCallCount);
+            for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+                const TimingId id = static_cast<TimingId>(i);
+                const TimingWindow& window = timingStore.window[id];
+                if (id == TIMING_FRAME) {
+                    const double fps = window.mean > 0.0 ? 1000.0 / window.mean : 0.0;
+                    std::printf("  %-30s %7.3f +/- %6.3f ms (%.0f FPS)\n", timingReportColumnName(id), window.mean,
+                                window.standardDeviation, fps);
+                } else {
+                    std::printf("  %-30s %7.3f +/- %6.3f ms\n", timingReportColumnName(id), window.mean,
+                                window.standardDeviation);
+                }
+            }
+            lastPrintTime = currentTime;
         }
 
         if (shouldExit) {
@@ -297,12 +286,9 @@ int main(int argc, char** argv)
 
     // 测量报告由程序自己写入，不依赖控制台重定向
     if (!reportPath.empty()) {
-        if (reportFrameCount == 0) {
+        if (timingStore.report[TIMING_FRAME].sampleCount == 0) {
             FATAL("no frame was sampled in the measurement window, set --auto-exit longer than the warm-up time");
         }
-
-        const double windowSeconds = glfwGetTime() - reportWindowStart;
-        const double frameCount = static_cast<double>(reportFrameCount);
 
         // 追加写入前判断文件是否为空，为空则先写一行表头
         std::FILE* probeFile = std::fopen(reportPath.c_str(), "rb");
@@ -318,14 +304,20 @@ int main(int argc, char** argv)
             FATAL("failed to open measurement report file: %s", reportPath.c_str());
         }
         if (needsHeader) {
-            std::fprintf(reportFile,
-                         "draw_path,instances,visible_instances,draw_commands,frame_ms,cpu_cull_ms,"
-                         "cpu_record_ms,gpu_ms\n");
+            std::fprintf(reportFile, "draw_path,instances,visible_instances,draw_commands");
+            for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+                const char* columnName = timingReportColumnName(static_cast<TimingId>(i));
+                std::fprintf(reportFile, ",%s_avg,%s_stddev", columnName, columnName);
+            }
+            std::fprintf(reportFile, "\n");
         }
-        std::fprintf(reportFile, "%s,%u,%u,%u,%.3f,%.3f,%.3f,%.3f\n", drawPathName(uiState.drawPath),
-                     static_cast<uint32_t>(uiState.activeInstanceCount), reportVisibleCount,
-                     reportDrawCallCount, windowSeconds * 1000.0 / frameCount, reportCpuCull / frameCount,
-                     reportCpuRecord / frameCount, reportGpu / frameCount);
+        std::fprintf(reportFile, "%s,%u,%u,%u", drawPathName(uiState.drawPath),
+                     static_cast<uint32_t>(uiState.activeInstanceCount), reportVisibleCount, reportDrawCallCount);
+        for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+            const TimingReportAccumulator& accumulator = timingStore.report[i];
+            std::fprintf(reportFile, ",%.3f,%.3f", accumulator.mean, timingReportStandardDeviation(accumulator));
+        }
+        std::fprintf(reportFile, "\n");
         std::fclose(reportFile);
     }
 

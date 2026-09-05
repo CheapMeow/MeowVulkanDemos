@@ -6,6 +6,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <imgui_internal.h>
+#include <implot.h>
 
 #include <cstdio>
 
@@ -25,10 +26,9 @@ static const char* const TEXT_FAR_PLANE = "远裁剪面";
 static const char* const TEXT_MOVE_SPEED = "移动速度";
 
 static const char* const TEXT_SECTION_TIMING = "本帧耗时";
-static const char* const TEXT_FRAME_TIME = "帧时间       %7.3f ms  (%.0f FPS)";
-static const char* const TEXT_CPU_CULL_TIME = "主机剔除     %7.3f ms";
-static const char* const TEXT_CPU_RECORD_TIME = "主机记录命令 %7.3f ms";
-static const char* const TEXT_GPU_TIME = "设备时间     %7.3f ms";
+static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线是从启动到现在的完整历史";
+static const char* const TEXT_AXIS_TIME = "运行时间 (s)";
+static const char* const TEXT_AXIS_MILLISECONDS = "毫秒";
 
 static const char* const TEXT_SECTION_WORKLOAD = "本帧工作量";
 static const char* const TEXT_TOTAL_INSTANCES = "实例总数 %d";
@@ -48,13 +48,23 @@ static const char* const TEXT_EXPLANATION =
     "设备时间在三条路径上保持一致。";
 
 static const char* const ALL_INTERFACE_TEXTS[] = {
-    TEXT_PANEL_TITLE,       TEXT_SECTION_PATH,     TEXT_PATH_TRADITIONAL, TEXT_PATH_INSTANCED,
-    TEXT_PATH_INDIRECT,     TEXT_SECTION_SCENE,    TEXT_INSTANCE_COUNT,   TEXT_LIGHT_COUNT,
-    TEXT_FAR_PLANE,         TEXT_MOVE_SPEED,       TEXT_SECTION_TIMING,   TEXT_FRAME_TIME,
-    TEXT_CPU_CULL_TIME,     TEXT_CPU_RECORD_TIME,  TEXT_GPU_TIME,         TEXT_SECTION_WORKLOAD,
-    TEXT_TOTAL_INSTANCES,   TEXT_VISIBLE_INSTANCES, TEXT_DRAW_COMMANDS,   TEXT_SECTION_GUIDE,
-    TEXT_GUIDE_MOVE,        TEXT_GUIDE_LOOK,       TEXT_GUIDE_SWITCH,     TEXT_GUIDE_QUIT,
-    TEXT_GUIDE_DRAG,        TEXT_EXPLANATION
+    TEXT_PANEL_TITLE,         TEXT_SECTION_PATH,        TEXT_PATH_TRADITIONAL,      TEXT_PATH_INSTANCED,
+    TEXT_PATH_INDIRECT,       TEXT_SECTION_SCENE,       TEXT_INSTANCE_COUNT,        TEXT_LIGHT_COUNT,
+    TEXT_FAR_PLANE,           TEXT_MOVE_SPEED,          TEXT_SECTION_TIMING,        TEXT_TIMING_HINT,
+    TEXT_AXIS_TIME,           TEXT_AXIS_MILLISECONDS,   TEXT_SECTION_WORKLOAD,      TEXT_TOTAL_INSTANCES,
+    TEXT_VISIBLE_INSTANCES,   TEXT_DRAW_COMMANDS,       TEXT_SECTION_GUIDE,         TEXT_GUIDE_MOVE,
+    TEXT_GUIDE_LOOK,          TEXT_GUIDE_SWITCH,        TEXT_GUIDE_QUIT,            TEXT_GUIDE_DRAG,
+    TEXT_EXPLANATION,
+    timingDisplayName(TIMING_FRAME),
+    timingDisplayName(TIMING_CPU_CULL),
+    timingDisplayName(TIMING_CPU_RECORD_BEGIN),
+    timingDisplayName(TIMING_CPU_RECORD_CULL_DISPATCH),
+    timingDisplayName(TIMING_CPU_RECORD_GBUFFER_PASS),
+    timingDisplayName(TIMING_CPU_RECORD_LIGHTING_PASS),
+    timingDisplayName(TIMING_CPU_RECORD_UI),
+    timingDisplayName(TIMING_CPU_RECORD_CAPTURE),
+    timingDisplayName(TIMING_CPU_RECORD_SUBMIT),
+    timingDisplayName(TIMING_GPU_TOTAL),
 };
 
 enum { INTERFACE_TEXT_COUNT = sizeof(ALL_INTERFACE_TEXTS) / sizeof(ALL_INTERFACE_TEXTS[0]) };
@@ -122,6 +132,7 @@ void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, Use
     VK_CHECK(vkCreateDescriptorPool(ctx.device, &poolInfo, nullptr, &ui.descriptorPool));
 
     ImGui::CreateContext();
+    ImPlot::CreateContext();
 
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
@@ -186,6 +197,7 @@ void destroyUserInterface(const VulkanContext& ctx, UserInterface& ui)
 {
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
+    ImPlot::DestroyContext();
     ImGui::DestroyContext();
     vkDestroyDescriptorPool(ctx.device, ui.descriptorPool, nullptr);
     ui.descriptorPool = VK_NULL_HANDLE;
@@ -198,10 +210,11 @@ void beginUserInterfaceFrame()
     ImGui::NewFrame();
 }
 
-void buildUserInterface(UiState& state, const UiStatistics& statistics, int maxInstanceCount, int maxLightCount)
+void buildUserInterface(UiState& state, const UiStatistics& statistics, const TimingStore& timing,
+                        int maxInstanceCount, int maxLightCount)
 {
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(520.0f, 860.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin(TEXT_PANEL_TITLE);
 
     ImGui::SeparatorText(TEXT_SECTION_PATH);
@@ -219,11 +232,36 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, int maxI
     ImGui::SliderFloat(TEXT_MOVE_SPEED, &state.cameraMoveSpeed, 5.0f, 400.0f, "%.0f");
 
     ImGui::SeparatorText(TEXT_SECTION_TIMING);
-    ImGui::Text(TEXT_FRAME_TIME, statistics.frameMilliseconds,
-                statistics.frameMilliseconds > 0.0 ? 1000.0 / statistics.frameMilliseconds : 0.0);
-    ImGui::Text(TEXT_CPU_CULL_TIME, statistics.cpuCullMilliseconds);
-    ImGui::Text(TEXT_CPU_RECORD_TIME, statistics.cpuRecordMilliseconds);
-    ImGui::Text(TEXT_GPU_TIME, statistics.gpuMilliseconds);
+    ImGui::TextWrapped("%s", TEXT_TIMING_HINT);
+    ImGui::BeginChild("TimingScrollRegion", ImVec2(0.0f, 420.0f), ImGuiChildFlags_Border);
+    for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+        const TimingId id = static_cast<TimingId>(i);
+        const TimingWindow& window = timing.window[id];
+        const char* name = timingDisplayName(id);
+
+        if (id == TIMING_FRAME) {
+            const double fps = window.mean > 0.0 ? 1000.0 / window.mean : 0.0;
+            ImGui::Text("%s   %7.3f ± %6.3f ms   (%.0f FPS)", name, window.mean, window.standardDeviation, fps);
+        } else {
+            ImGui::Text("%s   %7.3f ± %6.3f ms", name, window.mean, window.standardDeviation);
+        }
+
+        ImGui::PushID(i);
+        char plotId[96];
+        std::snprintf(plotId, sizeof(plotId), "%s##plot", name);
+        if (ImPlot::BeginPlot(plotId, ImVec2(-1.0f, 70.0f), ImPlotFlags_NoLegend)) {
+            ImPlot::SetupAxes(TEXT_AXIS_TIME, TEXT_AXIS_MILLISECONDS, ImPlotAxisFlags_AutoFit,
+                              ImPlotAxisFlags_AutoFit);
+            const std::vector<float>& values = timing.historyValues[id];
+            if (!values.empty()) {
+                ImPlot::PlotLine(name, timing.historyTimeSeconds.data(), values.data(),
+                                 static_cast<int>(values.size()));
+            }
+            ImPlot::EndPlot();
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
 
     ImGui::SeparatorText(TEXT_SECTION_WORKLOAD);
     ImGui::Text(TEXT_TOTAL_INSTANCES, state.activeInstanceCount);

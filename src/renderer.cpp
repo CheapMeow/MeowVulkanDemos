@@ -778,7 +778,7 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         outStatistics.cpuCullMilliseconds = (glfwGetTime() - cullStart) * 1000.0;
     }
 
-    const double recordStart = glfwGetTime();
+    const double recordBeginStart = glfwGetTime();
 
     VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
 
@@ -790,6 +790,9 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdResetQueryPool(frame.commandBuffer, frame.timestampPool, 0, 2);
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.timestampPool, 0);
 
+    outStatistics.cpuRecordBeginMilliseconds = (glfwGetTime() - recordBeginStart) * 1000.0;
+
+    const double cullDispatchStart = glfwGetTime();
     if (input.drawPath == DRAW_PATH_INDIRECT) {
         // 实例数量清零后由计算着色器用原子累加填充
         vkCmdFillBuffer(frame.commandBuffer, frame.indirectBuffer.buffer,
@@ -837,6 +840,10 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         vkCmdCopyBuffer(frame.commandBuffer, frame.indirectBuffer.buffer,
                         frame.visibleCountReadbackBuffer.buffer, 1, &countCopy);
     }
+    outStatistics.cpuRecordCullDispatchMilliseconds =
+        input.drawPath == DRAW_PATH_INDIRECT ? (glfwGetTime() - cullDispatchStart) * 1000.0 : 0.0;
+
+    const double gbufferPassStart = glfwGetTime();
 
     VkViewport viewport = {};
     viewport.width = static_cast<float>(ctx.swapchainExtent.width);
@@ -891,6 +898,9 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     }
 
     vkCmdEndRenderPass(frame.commandBuffer);
+    outStatistics.cpuRecordGBufferPassMilliseconds = (glfwGetTime() - gbufferPassStart) * 1000.0;
+
+    const double lightingPassStart = glfwGetTime();
 
     VkRenderPassBeginInfo lightingBegin = {};
     lightingBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -907,13 +917,17 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.lightingPipelineLayout,
                             0, 2, lightingSets, 0, nullptr);
     vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
+    outStatistics.cpuRecordLightingPassMilliseconds = (glfwGetTime() - lightingPassStart) * 1000.0;
 
+    const double uiStart = glfwGetTime();
     if (input.drawUserInterface) {
         recordUserInterfaceCommands(frame.commandBuffer);
     }
 
     vkCmdEndRenderPass(frame.commandBuffer);
+    outStatistics.cpuRecordUiMilliseconds = (glfwGetTime() - uiStart) * 1000.0;
 
+    const double captureStart = glfwGetTime();
     if (input.captureBuffer != nullptr) {
         VkImageMemoryBarrier toTransferSource = {};
         toTransferSource.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -947,7 +961,10 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &backToPresent);
     }
+    outStatistics.cpuRecordCaptureMilliseconds =
+        input.captureBuffer != nullptr ? (glfwGetTime() - captureStart) * 1000.0 : 0.0;
 
+    const double submitStart = glfwGetTime();
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.timestampPool, 1);
 
     VK_CHECK(vkEndCommandBuffer(frame.commandBuffer));
@@ -963,9 +980,9 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &renderer.presentSemaphores[imageIndex];
     VK_CHECK(vkQueueSubmit(ctx.queue, 1, &submitInfo, frame.inFlight));
+    outStatistics.cpuRecordSubmitMilliseconds = (glfwGetTime() - submitStart) * 1000.0;
 
     frame.timestampsValid = true;
-    outStatistics.cpuRecordMilliseconds = (glfwGetTime() - recordStart) * 1000.0;
     outStatistics.visibleInstanceCount = cpuVisibleCount;
 
     VkPresentInfoKHR presentInfo = {};
