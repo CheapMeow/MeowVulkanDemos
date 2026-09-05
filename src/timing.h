@@ -31,6 +31,8 @@ struct TimingWindow {
     int sampleCount;    // 已写入的样本数，达到窗口容量后不再增长
     double mean;
     double standardDeviation;
+    double minValue;    // 窗口内的最小值，用于曲线纵轴范围，避免早期的一次性尖峰把纵轴撑得又扁又平
+    double maxValue;
 };
 
 // 单个计时项从预热结束到当前的在线统计量，使用 Welford 算法逐帧累加

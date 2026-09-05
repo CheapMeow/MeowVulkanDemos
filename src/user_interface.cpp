@@ -8,6 +8,7 @@
 #include <imgui_internal.h>
 #include <implot.h>
 
+#include <algorithm>
 #include <cstdio>
 
 // 界面上的全部文本。字体字形范围、启动校验与界面绘制都以这份定义为唯一来源，
@@ -250,8 +251,16 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
         char plotId[96];
         std::snprintf(plotId, sizeof(plotId), "%s##plot", name);
         if (ImPlot::BeginPlot(plotId, ImVec2(-1.0f, 70.0f), ImPlotFlags_NoLegend)) {
-            ImPlot::SetupAxes(TEXT_AXIS_TIME, TEXT_AXIS_MILLISECONDS, ImPlotAxisFlags_AutoFit,
-                              ImPlotAxisFlags_AutoFit);
+            ImPlot::SetupAxes(TEXT_AXIS_TIME, TEXT_AXIS_MILLISECONDS, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
+
+            // 纵轴范围由最近一百帧的最小值与最大值决定，而不是整条历史的最小值与最大值：
+            // 启动阶段管线编译、纹理上传等一次性尖峰远大于稳定运行后的数值，如果纵轴跟着全部历史
+            // 自动缩放，稳定运行后的曲线会被压扁成一条几乎看不出波动的直线
+            const double range = window.maxValue - window.minValue;
+            const double margin = std::max(range * 0.1, 0.005);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, std::max(0.0, window.minValue - margin), window.maxValue + margin,
+                                    ImGuiCond_Always);
+
             const std::vector<float>& values = timing.historyValues[id];
             if (!values.empty()) {
                 ImPlot::PlotLine(name, timing.historyTimeSeconds.data(), values.data(),
