@@ -1,6 +1,5 @@
 #include "timing.h"
 
-#include <algorithm>
 #include <cmath>
 
 const char* timingDisplayName(TimingId id)
@@ -57,18 +56,12 @@ static void updateWindowStatistics(TimingWindow& window)
     if (window.sampleCount == 0) {
         window.mean = 0.0;
         window.standardDeviation = 0.0;
-        window.minValue = 0.0;
-        window.maxValue = 0.0;
         return;
     }
 
     double sum = 0.0;
-    double minValue = window.samples[0];
-    double maxValue = window.samples[0];
     for (int i = 0; i < window.sampleCount; ++i) {
         sum += window.samples[i];
-        minValue = std::min(minValue, window.samples[i]);
-        maxValue = std::max(maxValue, window.samples[i]);
     }
     const double mean = sum / static_cast<double>(window.sampleCount);
 
@@ -82,8 +75,6 @@ static void updateWindowStatistics(TimingWindow& window)
 
     window.mean = mean;
     window.standardDeviation = std::sqrt(variance);
-    window.minValue = minValue;
-    window.maxValue = maxValue;
 }
 
 static void pushReportSample(TimingReportAccumulator& accumulator, double value)

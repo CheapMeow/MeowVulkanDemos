@@ -27,9 +27,13 @@ static const char* const TEXT_FAR_PLANE = "远裁剪面";
 static const char* const TEXT_MOVE_SPEED = "移动速度";
 
 static const char* const TEXT_SECTION_TIMING = "本帧耗时";
-static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线是从启动到现在的完整历史";
+static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线展示最近这段时间的走势";
 static const char* const TEXT_AXIS_TIME = "运行时间 (s)";
 static const char* const TEXT_AXIS_MILLISECONDS = "毫秒";
+
+// 耗时曲线上可见的最近时长，单位秒。只展示这段时间的切片，横轴与纵轴的自动缩放才能贴合
+// 稳定运行后的正常波动，不会被启动阶段的一次性尖峰或早已滚出窗口的旧数据稀释
+static const double TIMING_PLOT_VISIBLE_SECONDS = 8.0;
 
 static const char* const TEXT_SECTION_WORKLOAD = "本帧工作量";
 static const char* const TEXT_TOTAL_INSTANCES = "实例总数 %d";
@@ -339,20 +343,22 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
         char plotId[96];
         std::snprintf(plotId, sizeof(plotId), "%s##plot", name);
         if (ImPlot::BeginPlot(plotId, ImVec2(-1.0f, 70.0f), ImPlotFlags_NoLegend)) {
-            ImPlot::SetupAxes(TEXT_AXIS_TIME, TEXT_AXIS_MILLISECONDS, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
+            ImPlot::SetupAxes(TEXT_AXIS_TIME, TEXT_AXIS_MILLISECONDS, ImPlotAxisFlags_AutoFit,
+                              ImPlotAxisFlags_AutoFit);
 
-            // 纵轴范围由最近一百帧的最小值与最大值决定，而不是整条历史的最小值与最大值：
-            // 启动阶段管线编译、纹理上传等一次性尖峰远大于稳定运行后的数值，如果纵轴跟着全部历史
-            // 自动缩放，稳定运行后的曲线会被压扁成一条几乎看不出波动的直线
-            const double range = window.maxValue - window.minValue;
-            const double margin = std::max(range * 0.1, 0.005);
-            ImPlot::SetupAxisLimits(ImAxis_Y1, std::max(0.0, window.minValue - margin), window.maxValue + margin,
-                                    ImGuiCond_Always);
-
+            // 只把最近若干秒的数据切片喂给 PlotLine：横轴与纵轴的自动缩放都基于这段切片计算，
+            // 曲线才能一直清晰可见。如果喂入从启动到现在的全部历史，启动阶段管线编译、纹理
+            // 上传等一次性尖峰会把横轴宽度和纵轴范围一起撑开，稳定运行后的正常波动只占极小
+            // 一部分区域，看起来就像是被压平的一条直线
+            const std::vector<float>& times = timing.historyTimeSeconds;
             const std::vector<float>& values = timing.historyValues[id];
-            if (!values.empty()) {
-                ImPlot::PlotLine(name, timing.historyTimeSeconds.data(), values.data(),
-                                 static_cast<int>(values.size()));
+            if (!times.empty()) {
+                const float windowStart =
+                    std::max(0.0f, times.back() - static_cast<float>(TIMING_PLOT_VISIBLE_SECONDS));
+                const auto startIt = std::lower_bound(times.begin(), times.end(), windowStart);
+                const int startIndex = static_cast<int>(startIt - times.begin());
+                const int visibleCount = static_cast<int>(times.size()) - startIndex;
+                ImPlot::PlotLine(name, times.data() + startIndex, values.data() + startIndex, visibleCount);
             }
             ImPlot::EndPlot();
         }
