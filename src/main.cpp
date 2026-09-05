@@ -1,3 +1,4 @@
+#include "console.h"
 #include "frame_capture.h"
 #include "obj_loader.h"
 #include "renderer.h"
@@ -14,6 +15,8 @@
 
 int main(int argc, char** argv)
 {
+    configureConsoleEncoding();
+
     uint32_t initialInstanceCount = 200000;
     uint32_t initialLightCount = 64;
     uint32_t lightCapacity = 256;
@@ -260,5 +263,7 @@ int main(int argc, char** argv)
 
     glfwDestroyWindow(window);
     glfwTerminate();
+
+    restoreConsoleEncoding();
     return EXIT_SUCCESS;
 }

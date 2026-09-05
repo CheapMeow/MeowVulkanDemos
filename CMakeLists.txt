@@ -4,6 +4,8 @@ project(VulkanIndirectDrawDemo C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "生成 compile_commands.json" FORCE)
+
 if(MSVC)
     add_compile_options(/W3)
 endif()
@@ -21,6 +23,7 @@ set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui")
 
 add_executable(VulkanIndirectDrawDemo
     src/main.cpp
+    src/console.cpp
     src/vk_context.cpp
     src/vk_resources.cpp
     src/obj_loader.cpp

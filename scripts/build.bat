@@ -12,7 +12,8 @@ if errorlevel 1 exit /b 1
 if not exist "%ROOT_DIR%\build" (
     "%CMAKE_EXE%" -S "%ROOT_DIR%" -B "%ROOT_DIR%\build" -G Ninja ^
         -DCMAKE_MAKE_PROGRAM="%NINJA_EXE%" ^
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     if errorlevel 1 exit /b 1
 )
 
