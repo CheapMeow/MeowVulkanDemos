@@ -27,13 +27,7 @@ static const char* const TEXT_FAR_PLANE = "远裁剪面";
 static const char* const TEXT_MOVE_SPEED = "移动速度";
 
 static const char* const TEXT_SECTION_TIMING = "本帧耗时";
-static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线展示最近这段时间的走势";
-static const char* const TEXT_AXIS_TIME = "运行时间 (s)";
-static const char* const TEXT_AXIS_MILLISECONDS = "毫秒";
-
-// 耗时曲线上可见的最近时长，单位秒。只展示这段时间的切片，横轴与纵轴的自动缩放才能贴合
-// 稳定运行后的正常波动，不会被启动阶段的一次性尖峰或早已滚出窗口的旧数据稀释
-static const double TIMING_PLOT_VISIBLE_SECONDS = 8.0;
+static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线同样展示最近 100 帧，横轴为启动以来的秒数，纵轴单位为毫秒，上下限取均值加减三倍标准差";
 
 static const char* const TEXT_SECTION_WORKLOAD = "本帧工作量";
 static const char* const TEXT_TOTAL_INSTANCES = "实例总数 %d";
@@ -69,7 +63,7 @@ static const char* const ALL_INTERFACE_TEXTS[] = {
     TEXT_PANEL_TITLE,         TEXT_SECTION_PATH,        TEXT_PATH_TRADITIONAL,      TEXT_PATH_INSTANCED,
     TEXT_PATH_INDIRECT,       TEXT_SECTION_SCENE,       TEXT_INSTANCE_COUNT,        TEXT_LIGHT_COUNT,
     TEXT_FAR_PLANE,           TEXT_MOVE_SPEED,          TEXT_SECTION_TIMING,        TEXT_TIMING_HINT,
-    TEXT_AXIS_TIME,           TEXT_AXIS_MILLISECONDS,   TEXT_SECTION_WORKLOAD,      TEXT_TOTAL_INSTANCES,
+    TEXT_SECTION_WORKLOAD,    TEXT_TOTAL_INSTANCES,
     TEXT_VISIBLE_INSTANCES,   TEXT_DRAW_COMMANDS,       TEXT_SECTION_GUIDE,         TEXT_GUIDE_MOVE,
     TEXT_GUIDE_LOOK,          TEXT_GUIDE_SWITCH,        TEXT_GUIDE_QUIT,            TEXT_GUIDE_DRAG,
     TEXT_EXPLANATION,
@@ -342,22 +336,29 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
         ImGui::PushID(i);
         char plotId[96];
         std::snprintf(plotId, sizeof(plotId), "%s##plot", name);
-        if (ImPlot::BeginPlot(plotId, ImVec2(-1.0f, 70.0f), ImPlotFlags_NoLegend)) {
-            ImPlot::SetupAxes(TEXT_AXIS_TIME, TEXT_AXIS_MILLISECONDS, ImPlotAxisFlags_AutoFit,
-                              ImPlotAxisFlags_AutoFit);
+        // 曲线图高度要给够：坐标轴刻度文字加上四周留白会占掉近七十像素，高度只有七十像素时
+        // 真正画曲线的区域只剩十几像素，纵轴范围怎么调都是被压平的一条线。坐标轴标题省掉，
+        // 单位写进上方的说明文字，坐标轴上只留刻度数值
+        if (ImPlot::BeginPlot(plotId, ImVec2(-1.0f, 150.0f), ImPlotFlags_NoLegend)) {
+            ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
 
-            // 只把最近若干秒的数据切片喂给 PlotLine：横轴与纵轴的自动缩放都基于这段切片计算，
-            // 曲线才能一直清晰可见。如果喂入从启动到现在的全部历史，启动阶段管线编译、纹理
-            // 上传等一次性尖峰会把横轴宽度和纵轴范围一起撑开，稳定运行后的正常波动只占极小
-            // 一部分区域，看起来就像是被压平的一条直线
+            // 纵轴上下限取最近一百帧的均值加减三倍标准差，不交给 ImPlot 自动缩放。自动缩放
+            // 会把上下限拉到数据里的极端值：一个离群的尖峰或者启动阶段的一次性开销就足以把
+            // 纵轴撑开，稳定运行后的正常波动只占其中极小一段，看起来就是一条被压平的直线。
+            // 三倍标准差覆盖正态分布下几乎全部样本，同时把个别离群值挡在纵轴范围之外
+            const double halfRange =
+                std::max({window.standardDeviation * 3.0, window.mean * 0.02, 0.05});
+            ImPlot::SetupAxisLimits(ImAxis_Y1, std::max(0.0, window.mean - halfRange),
+                                    window.mean + halfRange, ImPlotCond_Always);
+
+            // 横轴只喂入最近一百帧，与上面的均值和标准差取自同一批样本，画出来的点与纵轴范围
+            // 严格对应，不会出现大半截数据被裁到画面之外的情况
             const std::vector<float>& times = timing.historyTimeSeconds;
             const std::vector<float>& values = timing.historyValues[id];
-            if (!times.empty()) {
-                const float windowStart =
-                    std::max(0.0f, times.back() - static_cast<float>(TIMING_PLOT_VISIBLE_SECONDS));
-                const auto startIt = std::lower_bound(times.begin(), times.end(), windowStart);
-                const int startIndex = static_cast<int>(startIt - times.begin());
-                const int visibleCount = static_cast<int>(times.size()) - startIndex;
+            const int totalCount = static_cast<int>(times.size());
+            const int visibleCount = std::min(totalCount, static_cast<int>(TIMING_WINDOW_CAPACITY));
+            if (visibleCount > 0) {
+                const int startIndex = totalCount - visibleCount;
                 ImPlot::PlotLine(name, times.data() + startIndex, values.data() + startIndex, visibleCount);
             }
             ImPlot::EndPlot();
