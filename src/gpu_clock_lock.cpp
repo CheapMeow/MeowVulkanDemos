@@ -264,6 +264,56 @@ void queryLiveGpuClocks(GpuClockLockState& state)
     }
 }
 
+// 在降序排列的档位列表里找最接近请求值的那一项，列表为空时返回 -1
+static int findClosestClockIndex(const std::vector<uint32_t>& supportedClocksMHz, uint32_t requestedMHz)
+{
+    if (supportedClocksMHz.empty()) {
+        return -1;
+    }
+
+    int closestIndex = 0;
+    uint32_t closestDistance =
+        requestedMHz > supportedClocksMHz[0] ? requestedMHz - supportedClocksMHz[0] : supportedClocksMHz[0] - requestedMHz;
+    for (int i = 1; i < static_cast<int>(supportedClocksMHz.size()); ++i) {
+        const uint32_t distance = requestedMHz > supportedClocksMHz[i] ? requestedMHz - supportedClocksMHz[i]
+                                                                       : supportedClocksMHz[i] - requestedMHz;
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestIndex = i;
+        }
+    }
+    return closestIndex;
+}
+
+bool requestGpuClockLockFromCommandLine(GpuClockLockState& state, uint32_t requestedCoreMHz,
+                                        uint32_t requestedMemoryMHz)
+{
+    if (!state.detected) {
+        std::fprintf(stderr, "cannot lock gpu clocks: %s\n", state.lastActionDetail.c_str());
+        return false;
+    }
+
+    const int coreIndex = findClosestClockIndex(state.supportedCoreClocksMHz, requestedCoreMHz);
+    const int memoryIndex = findClosestClockIndex(state.supportedMemoryClocksMHz, requestedMemoryMHz);
+    if (coreIndex < 0 || memoryIndex < 0) {
+        std::fprintf(stderr, "cannot lock gpu clocks: the driver reported no supported clock level\n");
+        return false;
+    }
+
+    state.selectedCoreClockIndex = coreIndex;
+    state.selectedMemoryClockIndex = memoryIndex;
+    requestLockGpuClocks(state);
+
+    if (!state.locked) {
+        std::fprintf(stderr, "failed to lock gpu clocks: %s\n", state.lastActionDetail.c_str());
+        return false;
+    }
+
+    std::printf("locked gpu clocks: core %u MHz (requested %u), memory %u MHz (requested %u)\n",
+                state.lockedCoreClockMHz, requestedCoreMHz, state.lockedMemoryClockMHz, requestedMemoryMHz);
+    return true;
+}
+
 static void gpuClockMonitorLoop(GpuClockMonitor& monitor, double startTime)
 {
     while (true) {

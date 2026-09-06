@@ -58,6 +58,8 @@ int main(int argc, char** argv)
     double switchEverySeconds = 0.0;
     bool interfaceEnabled = true;
     double sweepEverySeconds = 0.0;
+    uint32_t requestedCoreClockMHz = 0;
+    uint32_t requestedMemoryClockMHz = 0;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--instances") == 0 && i + 1 < argc) {
@@ -90,12 +92,29 @@ int main(int argc, char** argv)
         } else if (std::strcmp(argv[i], "--report") == 0 && i + 1 < argc) {
             reportPath = argv[i + 1];
             ++i;
+        } else if (std::strcmp(argv[i], "--core-clock") == 0 && i + 1 < argc) {
+            requestedCoreClockMHz = static_cast<uint32_t>(std::atoi(argv[i + 1]));
+            ++i;
+        } else if (std::strcmp(argv[i], "--memory-clock") == 0 && i + 1 < argc) {
+            requestedMemoryClockMHz = static_cast<uint32_t>(std::atoi(argv[i + 1]));
+            ++i;
         }
     }
 
     // 与 Vulkan、窗口无关，尽早探测，探测不到就在面板里如实显示，不阻止程序继续运行
     GpuClockLockState gpuClockLockState;
     detectGpuClockLockState(gpuClockLockState);
+
+    // 命令行给了锁频目标就在启动阶段锁上：档位列表里取最接近请求值的一项，
+    // 实际锁到的值与请求值不同时会如实打印
+    const bool coreClockRequested = requestedCoreClockMHz > 0;
+    const bool memoryClockRequested = requestedMemoryClockMHz > 0;
+    if (coreClockRequested != memoryClockRequested) {
+        FATAL("--core-clock and --memory-clock must be given together");
+    }
+    if (coreClockRequested) {
+        requestGpuClockLockFromCommandLine(gpuClockLockState, requestedCoreClockMHz, requestedMemoryClockMHz);
+    }
 
     // 频率曲线由后台线程采样，测量模式下不启动，避免采样本身干扰被测的帧时间
     GpuClockMonitor gpuClockMonitor;

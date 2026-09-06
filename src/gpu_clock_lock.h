@@ -86,6 +86,12 @@ void copyGpuClockSamples(const GpuClockMonitor& monitor, std::vector<float>& out
 // 按下拉框当前选中的档位调用 nvidia-smi -lgc/-lmc 锁频
 void requestLockGpuClocks(GpuClockLockState& state);
 
+// 按命令行传入的目标频率锁频：在两个档位列表里各取最接近请求值的一项，选中它再锁定。
+// 探测不到显卡或者档位列表为空时什么都不做，返回 false 并说明原因；驱动拒绝锁频时
+// 同样返回 false，并把 nvidia-smi 的输出打出来
+bool requestGpuClockLockFromCommandLine(GpuClockLockState& state, uint32_t requestedCoreMHz,
+                                        uint32_t requestedMemoryMHz);
+
 // 调用 nvidia-smi -rgc/-rmc 解锁
 void requestUnlockGpuClocks(GpuClockLockState& state);
 
