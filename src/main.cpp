@@ -1,8 +1,10 @@
 #include "asset_file.h"
 #include "console.h"
+#include "control_server.h"
 #include "frame_capture.h"
 #include "gpu_clock_lock.h"
 #include "obj_loader.h"
+#include "rdoc_trigger.h"
 #include "renderer.h"
 #include "scene.h"
 #include "timing.h"
@@ -13,6 +15,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -32,16 +35,31 @@ static void rebuildSwapchainResources(VulkanContext& ctx, Renderer& renderer, Gp
     }
 }
 
-// 统计行与测量报告里的路径名称
-static const char* drawPathName(DrawPath drawPath)
+// 把一行数据追加到报告文件，文件为空时先写一行表头
+static void appendReportLine(const std::string& reportPath, const std::string& line)
 {
-    if (drawPath == DRAW_PATH_TRADITIONAL) {
-        return "per-instance drawIndexed";
+    std::FILE* probeFile = std::fopen(reportPath.c_str(), "rb");
+    bool needsHeader = true;
+    if (probeFile != nullptr) {
+        std::fseek(probeFile, 0, SEEK_END);
+        needsHeader = std::ftell(probeFile) == 0;
+        std::fclose(probeFile);
     }
-    if (drawPath == DRAW_PATH_INSTANCED) {
-        return "instanced drawIndexed";
+
+    std::FILE* reportFile = std::fopen(reportPath.c_str(), "a");
+    if (reportFile == nullptr) {
+        FATAL("failed to open measurement report file: %s", reportPath.c_str());
     }
-    return "indirect + compute shader culling";
+    if (needsHeader) {
+        std::fprintf(reportFile, "draw_path,instances,visible_instances,draw_commands");
+        for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+            const char* columnName = timingReportColumnName(static_cast<TimingId>(i));
+            std::fprintf(reportFile, ",%s_avg,%s_stddev", columnName, columnName);
+        }
+        std::fprintf(reportFile, "\n");
+    }
+    std::fprintf(reportFile, "%s\n", line.c_str());
+    std::fclose(reportFile);
 }
 
 int main(int argc, char** argv)
@@ -59,6 +77,7 @@ int main(int argc, char** argv)
     double switchEverySeconds = 0.0;
     bool interfaceEnabled = true;
     double sweepEverySeconds = 0.0;
+    uint16_t controlPort = 0;
     uint32_t requestedCoreClockMHz = 0;
     uint32_t requestedMemoryClockMHz = 0;
 
@@ -92,6 +111,9 @@ int main(int argc, char** argv)
             ++i;
         } else if (std::strcmp(argv[i], "--report") == 0 && i + 1 < argc) {
             reportPath = argv[i + 1];
+            ++i;
+        } else if (std::strcmp(argv[i], "--control-port") == 0 && i + 1 < argc) {
+            controlPort = static_cast<uint16_t>(std::atoi(argv[i + 1]));
             ++i;
         } else if (std::strcmp(argv[i], "--core-clock") == 0 && i + 1 < argc) {
             requestedCoreClockMHz = static_cast<uint32_t>(std::atoi(argv[i + 1]));
@@ -194,12 +216,116 @@ int main(int argc, char** argv)
     }
     bool captureDone = false;
 
+    // TCP 控制服务：外部测量脚本连接后逐条发命令，配置、分段测量、截帧都在这里执行。
+    // 命令在主线程的 pump 里处理，与渲染线程天然串行，不需要额外加锁
+    ControlServer controlServer;
+    bool usedSegments = false;      // 用过 begin/end 分段测量后，退出不再写整段报告
+    bool segmentActive = false;     // 当前是否处于 begin 到 end 的测量分段
+    double segmentStartSeconds = 0.0;
+    bool quitRequested = false;
+
+    controlServer.onCommand = [&](const std::string& command) -> std::string {
+        std::istringstream stream(command);
+        std::string verb;
+        stream >> verb;
+
+        if (verb == "path") {
+            std::string value;
+            stream >> value;
+            DrawPath newPath = DRAW_PATH_TRADITIONAL;
+            if (value == "traditional" || value == "0") {
+                newPath = DRAW_PATH_TRADITIONAL;
+            } else if (value == "instanced" || value == "1") {
+                newPath = DRAW_PATH_INSTANCED;
+            } else if (value == "indirect" || value == "2") {
+                newPath = DRAW_PATH_INDIRECT;
+            } else {
+                return "err: unknown path";
+            }
+            uiState.drawPath = newPath;
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "instances") {
+            long value = 0;
+            if (!(stream >> value) || value < 1 || value > static_cast<long>(instanceCapacity)) {
+                return "err: instances out of range";
+            }
+            uiState.activeInstanceCount = static_cast<int>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "lights") {
+            long value = 0;
+            if (!(stream >> value) || value < 1 || value > static_cast<long>(lightCapacity)) {
+                return "err: lights out of range";
+            }
+            uiState.activeLightCount = static_cast<int>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "far") {
+            double value = 0.0;
+            if (!(stream >> value) || value <= 0.0) {
+                return "err: bad far plane";
+            }
+            uiState.farPlane = static_cast<float>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "begin") {
+            usedSegments = true;
+            segmentActive = true;
+            segmentStartSeconds = nowSeconds();
+            reportVisibleCount = 0;
+            reportDrawCallCount = 0;
+            resetTimingReport(timingStore);
+            return "ok";
+        }
+        if (verb == "end") {
+            if (!segmentActive) {
+                return "err: no segment started";
+            }
+            if (timingStore.report[TIMING_FRAME].sampleCount == 0) {
+                return "err: segment had no sampled frames";
+            }
+            const std::string line = timingReportLine(
+                drawPathName(uiState.drawPath), static_cast<uint32_t>(uiState.activeInstanceCount),
+                reportVisibleCount, reportDrawCallCount, timingStore);
+            if (!reportPath.empty()) {
+                appendReportLine(reportPath, line);
+            }
+            segmentActive = false;
+            resetTimingReport(timingStore);
+            return "row " + line;
+        }
+        if (verb == "capture") {
+            renderdocTriggerCapture();
+            return "ok";
+        }
+        if (verb == "quit") {
+            quitRequested = true;
+            return "ok";
+        }
+        return "err: unknown command";
+    };
+
+    if (controlPort != 0 && !controlServer.start(controlPort)) {
+        FATAL("failed to open the TCP control server on port %u", controlPort);
+    }
+
     if (interfaceEnabled) {
         startGpuClockMonitor(gpuClockMonitor, gpuClockLockState, startTime);
     }
 
     while (glfwWindowShouldClose(window) == 0) {
         glfwPollEvents();
+
+        // 处理 TCP 控制命令，quit 请求立即退出
+        controlServer.pump();
+        if (quitRequested) {
+            break;
+        }
 
         // 窗口最小化时表面尺寸为零，没有可以绘制的内容，等窗口恢复
         int framebufferWidth = 0;
@@ -314,7 +440,9 @@ int main(int argc, char** argv)
         uiStatistics.visibleInstanceCount = statistics.visibleInstanceCount;
         uiStatistics.drawCallCount = statistics.drawCallCount;
 
-        const bool includeInReport = currentTime - startTime >= warmUpSeconds;
+        const bool includeInReport =
+            usedSegments ? (segmentActive && currentTime - segmentStartSeconds >= warmUpSeconds)
+                         : (currentTime - startTime >= warmUpSeconds);
         if (includeInReport) {
             reportVisibleCount = statistics.visibleInstanceCount;
             reportDrawCallCount = statistics.drawCallCount;
@@ -357,6 +485,7 @@ int main(int argc, char** argv)
         }
     }
 
+    controlServer.stop();
     stopGpuClockMonitor(gpuClockMonitor);
 
     VK_CHECK(vkDeviceWaitIdle(ctx.device));
@@ -370,41 +499,16 @@ int main(int argc, char** argv)
                 static_cast<unsigned long long>(frameCounter), uiStatistics.visibleInstanceCount,
                 uiStatistics.drawCallCount);
 
-    // 测量报告由程序自己写入，不依赖控制台重定向
-    if (!reportPath.empty()) {
+    // 测量报告由程序自己写入，不依赖控制台重定向。分段测量时每一段在 end 命令时写一行，
+    // 这里只处理没有使用分段测量的整段运行
+    if (!reportPath.empty() && !usedSegments) {
         if (timingStore.report[TIMING_FRAME].sampleCount == 0) {
             FATAL("no frame was sampled in the measurement window, set --auto-exit longer than the warm-up time");
         }
-
-        // 追加写入前判断文件是否为空，为空则先写一行表头
-        std::FILE* probeFile = std::fopen(reportPath.c_str(), "rb");
-        bool needsHeader = true;
-        if (probeFile != nullptr) {
-            std::fseek(probeFile, 0, SEEK_END);
-            needsHeader = std::ftell(probeFile) == 0;
-            std::fclose(probeFile);
-        }
-
-        std::FILE* reportFile = std::fopen(reportPath.c_str(), "a");
-        if (reportFile == nullptr) {
-            FATAL("failed to open measurement report file: %s", reportPath.c_str());
-        }
-        if (needsHeader) {
-            std::fprintf(reportFile, "draw_path,instances,visible_instances,draw_commands");
-            for (int i = 0; i < TIMING_ID_COUNT; ++i) {
-                const char* columnName = timingReportColumnName(static_cast<TimingId>(i));
-                std::fprintf(reportFile, ",%s_avg,%s_stddev", columnName, columnName);
-            }
-            std::fprintf(reportFile, "\n");
-        }
-        std::fprintf(reportFile, "%s,%u,%u,%u", drawPathName(uiState.drawPath),
-                     static_cast<uint32_t>(uiState.activeInstanceCount), reportVisibleCount, reportDrawCallCount);
-        for (int i = 0; i < TIMING_ID_COUNT; ++i) {
-            const TimingReportAccumulator& accumulator = timingStore.report[i];
-            std::fprintf(reportFile, ",%.3f,%.3f", accumulator.mean, timingReportStandardDeviation(accumulator));
-        }
-        std::fprintf(reportFile, "\n");
-        std::fclose(reportFile);
+        const std::string line = timingReportLine(drawPathName(uiState.drawPath),
+                                                 static_cast<uint32_t>(uiState.activeInstanceCount),
+                                                 reportVisibleCount, reportDrawCallCount, timingStore);
+        appendReportLine(reportPath, line);
     }
 
     destroyUserInterface(ctx, ui);

@@ -8,6 +8,17 @@
 #include <cstddef>
 #include <cstring>
 
+const char* drawPathName(DrawPath drawPath)
+{
+    if (drawPath == DRAW_PATH_TRADITIONAL) {
+        return "per-instance drawIndexed";
+    }
+    if (drawPath == DRAW_PATH_INSTANCED) {
+        return "instanced drawIndexed";
+    }
+    return "indirect + compute shader culling";
+}
+
 static const VkFormat GBUFFER_ALBEDO_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
 static const VkFormat GBUFFER_NORMAL_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 static const VkFormat GBUFFER_POSITION_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;

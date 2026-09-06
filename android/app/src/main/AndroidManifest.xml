@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- TCP 控制服务经 adb forward 从电脑接入，需要网络权限 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- NativeActivity 不申请其他权限 -->
     <application
         android:label="Vulkan Indirect Draw Demo"

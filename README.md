@@ -81,6 +81,8 @@ adb logcat -s VulkanIndirectDrawDemo
 
 用 RenderDoc 在真机上截帧不需要在本机启动 qrenderdoc：`scripts\renderdoc_capture.bat start` 通过 adb 完成整套准备——启动设备上的 RenderDoc 远程服务 `org.renderdoc.renderdoccmd.arm64`，把 `VK_LAYER_RENDERDOC_Capture` 挂到本应用的包名上，再以带层的方式启动应用；`scripts\renderdoc_capture.bat stop` 撤销这些全局设置。截帧文件由设备端 RenderDoc 写入 `/sdcard/Android/media/com.example.vulkanindirectdrawdemo/files/RenderDoc/`。手机需要先安装 RenderDoc 的 `org.renderdoc.renderdoccmd.arm64` 与本应用。脚本复刻标准 RenderDoc 安卓挂载流程，纯批处理实现，不依赖 python。
 
+应用内置回环 TCP 控制服务（桌面与安卓一致，端口 21000），测试脚本连接后按行发命令：`path`/`instances`/`lights`/`far` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`capture` 触发 RenderDoc 截一帧，`quit` 退出。安卓端经 `adb forward tcp:21000 tcp:21000` 把设备上的控制端口映射到本机。`scripts\measure_android.bat` 用这套接口在真机上跑与 `measure_pc.bat` 相同的配置网格，把每段返回的行写进 `intermediate\measure_report_android.csv`。
+
 ## 运行
 
 ```
@@ -179,20 +181,21 @@ scripts\compare.bat 200000 420 8
 
 三个参数依次为实例数量、远裁剪面距离、每条路径的运行秒数。脚本关闭界面分别运行三条路径，把耗时写进 `intermediate\compare_report.csv`，把三张 PNG 的 SHA256 写进 `intermediate\compare_hashes.csv`。
 
-一致性验证与耗时测量：
+一致性验证与耗时测量（PC 与安卓分开）：
 
 ```
 scripts\verify_paths.bat
-scripts\measure.bat
+scripts\measure_pc.bat
+scripts\measure_android.bat
 ```
 
-前者在一千、两万、二十万、一百万实例下分别运行三条路径，对比可见实例数量；后者在三组配置下测量三条路径的耗时。两个脚本都关闭界面运行，结果分别写进 `intermediate\verify_report.csv` 与 `intermediate\measure_report.csv`。
+`verify_paths.bat` 在一千、两万、二十万、一百万实例下分别运行三条路径，对比可见实例数量。`measure_pc.bat` 在 PC 上、`measure_android.bat` 在安卓真机上执行同一套配置网格（三组实例数/远裁剪面 × 三条路径）的耗时测量。桌面版启动一个带 TCP 控制服务的进程，把每组配置当作一个测量分段，分段结束时把该段的均值/标准差追加进 `intermediate\measure_report.csv`；安卓版把设备上的控制端口经 `adb forward` 映射到本机，从每段的 `end` 回复里收集同一格式的行，写进 `intermediate\measure_report_android.csv`。桌面测量关闭界面，安卓测量保留界面。
 
 全部脚本的提示文字与生成的报告都使用英文，报告一律是 CSV 格式，可以直接导入表格软件。
 
 ## 实测数据
 
-测试环境为 NVIDIA GeForce RTX 5080，核心频率锁定 2880 MHz、显存频率锁定 15001 MHz（`scripts\measure.bat` 的默认设置），分辨率 1600x900，模型 67907 个三角形，64 个点光源，呈现模式为立即模式，测量时关闭界面面板。以下数据取自 `scripts\measure.bat` 生成的 CSV 报告的平均值列。关闭界面面板、不抓取画面时，记录：界面绘制与记录：抓帧拷贝这两项恒为零，下表不再单独列出。
+测试环境为 NVIDIA GeForce RTX 5080，核心频率锁定 2880 MHz、显存频率锁定 15001 MHz（`scripts\measure_pc.bat` 的默认设置），分辨率 1600x900，模型 67907 个三角形，64 个点光源，呈现模式为立即模式，测量时关闭界面面板。以下数据取自 `scripts\measure_pc.bat` 生成的 CSV 报告的平均值列。关闭界面面板、不抓取画面时，记录：界面绘制与记录：抓帧拷贝这两项恒为零，下表不再单独列出。
 
 20 万实例，远裁剪面 160，可见 435 个实例：
 

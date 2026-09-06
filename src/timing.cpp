@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 
 double nowSeconds()
 {
@@ -58,6 +59,13 @@ void resetTimingWindows(TimingStore& store)
     store.windowCursor = 0;
 }
 
+void resetTimingReport(TimingStore& store)
+{
+    for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+        store.report[i] = TimingReportAccumulator();
+    }
+}
+
 // 用当前窗口内的样本重新计算均值与标准差，窗口容量固定为 100，开销可以忽略
 static void updateWindowStatistics(TimingWindow& window)
 {
@@ -101,6 +109,24 @@ double timingReportStandardDeviation(const TimingReportAccumulator& accumulator)
     }
     const double variance = accumulator.sumSquaredDelta / static_cast<double>(accumulator.sampleCount - 1);
     return std::sqrt(variance);
+}
+
+std::string timingReportLine(const char* pathName, uint32_t instances, uint32_t visibleInstances,
+                             uint32_t drawCommands, const TimingStore& store)
+{
+    char prefix[128];
+    const int prefixLength =
+        std::snprintf(prefix, sizeof(prefix), "%s,%u,%u,%u", pathName, instances, visibleInstances, drawCommands);
+    std::string line(prefix, static_cast<size_t>(prefixLength));
+    for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+        const TimingReportAccumulator& accumulator = store.report[i];
+        char numbers[64];
+        const int numberLength =
+            std::snprintf(numbers, sizeof(numbers), ",%.3f,%.3f", accumulator.mean,
+                          timingReportStandardDeviation(accumulator));
+        line.append(numbers, static_cast<size_t>(numberLength));
+    }
+    return line;
 }
 
 void recordFrameTimingSamples(TimingStore& store, double currentTime, bool includeInReport,

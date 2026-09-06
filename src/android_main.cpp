@@ -1,8 +1,10 @@
 #ifdef __ANDROID__
 
 #include "asset_file.h"
+#include "control_server.h"
 #include "gpu_clock_lock.h"
 #include "obj_loader.h"
+#include "rdoc_trigger.h"
 #include "renderer.h"
 #include "scene.h"
 #include "timing.h"
@@ -14,7 +16,9 @@
 #include <android_native_app_glue.h>
 
 #include <cstring>
+#include <sstream>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include <imgui_impl_android.h>
@@ -55,7 +59,21 @@ struct AppState {
     double previousSeconds = 0.0;
     double startSeconds = 0.0;
     double lastPrintSeconds = 0.0;
+
+    // TCP 控制服务与分段测量状态。命令经 controlServer.pump() 在主线程执行
+    ControlServer controlServer;
+    bool quitRequested = false;
+    bool segmentActive = false;
+    double segmentStartSeconds = 0.0;
+    uint32_t segmentVisibleCount = 0;
+    uint32_t segmentDrawCallCount = 0;
 };
+
+// 测量分段跳过起始的预热帧
+static constexpr double kWarmUpSeconds = 1.5;
+
+// TCP 控制服务端口，脚本通过 adb reverse 把本机端口映射到设备
+static constexpr uint16_t kControlPort = 21000;
 
 // 第一块可用的窗口出现时做全量初始化：表面 -> 设备 -> 交换链 -> 网格与全部渲染资源
 static void initializeRendererStack(AppState& state, android_app* app)
@@ -260,7 +278,13 @@ static void drawOneFrame(AppState& state)
     timingValues[TIMING_CPU_RECORD_CAPTURE] = statistics.cpuRecordCaptureMilliseconds;
     timingValues[TIMING_CPU_RECORD_SUBMIT] = statistics.cpuRecordSubmitMilliseconds;
     timingValues[TIMING_GPU_TOTAL] = statistics.gpuMilliseconds;
-    recordFrameTimingSamples(state.timingStore, currentTime, true, timingValues);
+    const bool includeInReport =
+        state.segmentActive && currentTime - state.segmentStartSeconds >= kWarmUpSeconds;
+    if (includeInReport) {
+        state.segmentVisibleCount = statistics.visibleInstanceCount;
+        state.segmentDrawCallCount = statistics.drawCallCount;
+    }
+    recordFrameTimingSamples(state.timingStore, currentTime, includeInReport, timingValues);
 
     if (currentTime - state.lastPrintSeconds >= 2.0) {
         const TimingWindow& frameWindow = state.timingStore.window[TIMING_FRAME];
@@ -270,6 +294,95 @@ static void drawOneFrame(AppState& state)
               state.ctx.swapchainExtent.height);
         state.lastPrintSeconds = currentTime;
     }
+}
+
+// TCP 控制命令与桌面端一致：path/instances/lights/far 改配置，
+// begin/end 圈定一段测量并返回一行报告，capture 触发 RenderDoc 截帧
+static void installControlHandler(AppState& state)
+{
+    state.controlServer.onCommand = [&state](const std::string& command) -> std::string {
+        std::istringstream stream(command);
+        std::string verb;
+        stream >> verb;
+
+        if (verb == "path") {
+            std::string value;
+            stream >> value;
+            DrawPath newPath = DRAW_PATH_TRADITIONAL;
+            if (value == "traditional" || value == "0") {
+                newPath = DRAW_PATH_TRADITIONAL;
+            } else if (value == "instanced" || value == "1") {
+                newPath = DRAW_PATH_INSTANCED;
+            } else if (value == "indirect" || value == "2") {
+                newPath = DRAW_PATH_INDIRECT;
+            } else {
+                return "err: unknown path";
+            }
+            state.uiState.drawPath = newPath;
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "instances") {
+            long value = 0;
+            if (!(stream >> value) || value < 1 || value > static_cast<long>(state.instanceCapacity)) {
+                return "err: instances out of range";
+            }
+            state.uiState.activeInstanceCount = static_cast<int>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "lights") {
+            long value = 0;
+            if (!(stream >> value) || value < 1 || value > static_cast<long>(state.lightCapacity)) {
+                return "err: lights out of range";
+            }
+            state.uiState.activeLightCount = static_cast<int>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "far") {
+            double value = 0.0;
+            if (!(stream >> value) || value <= 0.0) {
+                return "err: bad far plane";
+            }
+            state.uiState.farPlane = static_cast<float>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "begin") {
+            state.segmentActive = true;
+            state.segmentStartSeconds = nowSeconds();
+            state.segmentVisibleCount = 0;
+            state.segmentDrawCallCount = 0;
+            resetTimingReport(state.timingStore);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "end") {
+            if (!state.segmentActive) {
+                return "err: no segment started";
+            }
+            if (state.timingStore.report[TIMING_FRAME].sampleCount == 0) {
+                return "err: segment had no sampled frames";
+            }
+            const std::string row = timingReportLine(
+                drawPathName(state.uiState.drawPath),
+                static_cast<uint32_t>(state.uiState.activeInstanceCount), state.segmentVisibleCount,
+                state.segmentDrawCallCount, state.timingStore);
+            state.segmentActive = false;
+            resetTimingReport(state.timingStore);
+            return "row " + row;
+        }
+        if (verb == "capture") {
+            renderdocTriggerCapture();
+            return "ok";
+        }
+        if (verb == "quit") {
+            state.quitRequested = true;
+            return "ok";
+        }
+        return "err: unknown command";
+    };
 }
 
 }  // namespace
@@ -288,9 +401,18 @@ void android_main(android_app* app)
     detectGpuClockLockState(state.gpuClockLockState);
     createVulkanContext(state.ctx, false);
 
+    installControlHandler(state);
+    state.controlServer.start(kControlPort);
+
     const double frameBudgetSeconds = 1.0 / 60.0;
 
     while (!state.destroying) {
+        // 处理 TCP 控制命令，quit 请求结束 activity
+        state.controlServer.pump();
+        if (state.quitRequested) {
+            break;
+        }
+
         // 逐条处理事件。没有事件可处理时：需要画帧就立即进入绘制（超时 0），
         // 否则阻塞等下一个事件（超时 -1）。超时值每轮都按当前状态重新计算，
         // 事件回调里 animating 由假变真之后才能立刻开始画帧
@@ -324,6 +446,7 @@ void android_main(android_app* app)
         }
     }
 
+    state.controlServer.stop();
     teardownSwapchain(state);
     VK_CHECK(vkDeviceWaitIdle(state.ctx.device));
     if (state.vulkanInitialized) {
@@ -331,6 +454,12 @@ void android_main(android_app* app)
         destroyRenderer(state.ctx, state.renderer);
     }
     destroyVulkanContext(state.ctx);
+
+    if (state.quitRequested) {
+        // 拆除全部资源后直接结束进程。activity 的 finish 需要活动回到前台才会走完
+        // 销毁流程，等它既不及时又不可靠，进程自退出由系统回收即可
+        _exit(0);
+    }
 }
 
 #endif

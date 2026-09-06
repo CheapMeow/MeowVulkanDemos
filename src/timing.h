@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 // 全部计时项。每一项对应一次独立的耗时测量，覆盖一帧里主机与设备两侧的每一个功能步骤
@@ -64,9 +65,16 @@ void initTimingStore(TimingStore& store, double startTime);
 // 避免界面上的均值和标准差在切换后的一段时间内混杂新旧路径的数据
 void resetTimingWindows(TimingStore& store);
 
+// 清空测量报告的在线统计。TCP 控制的分段测量在 begin 时调用，把这一段与上一段分开
+void resetTimingReport(TimingStore& store);
+
 // 每帧调用一次，values 必须按 TimingId 的顺序填满全部计时项的毫秒数
 // includeInReport 为真时，本帧同时计入测量报告的在线统计（用于跳过预热阶段）
 void recordFrameTimingSamples(TimingStore& store, double currentTime, bool includeInReport,
                               const double values[TIMING_ID_COUNT]);
 
 double timingReportStandardDeviation(const TimingReportAccumulator& accumulator);
+
+// 按测量报告的表头生成一行数据，供分段测量与整段报告共用
+std::string timingReportLine(const char* pathName, uint32_t instances, uint32_t visibleInstances,
+                             uint32_t drawCommands, const TimingStore& store);

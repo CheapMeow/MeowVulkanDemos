@@ -29,7 +29,9 @@ set(SHADER_SOURCES
 # 两个平台共用的源码：场景数据、Vulkan 资源、渲染器、耗时统计、界面
 set(DEMO_COMMON_SOURCES
     src/asset_file.cpp
+    src/control_server.cpp
     src/obj_loader.cpp
+    src/rdoc_trigger.cpp
     src/scene.cpp
     src/timing.cpp
     src/vk_context.cpp
@@ -50,6 +52,7 @@ set(DEMO_COMMON_SOURCES
 )
 
 set(DEMO_INCLUDE_DIRS
+    external
     external/glm
     external/stb
     "${IMGUI_DIR}"

@@ -18,6 +18,9 @@ enum DrawPath {
 
 enum { DRAW_PATH_COUNT = 3 };
 
+// 路径名称，控制台、测量报告与 TCP 分段报告共用
+const char* drawPathName(DrawPath drawPath);
+
 struct GBufferTargets {
     GpuTexture albedoOcclusion;
     GpuTexture normalRoughness;
