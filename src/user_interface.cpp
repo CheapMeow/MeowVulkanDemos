@@ -27,10 +27,10 @@ static const char* const TEXT_FAR_PLANE = "远裁剪面";
 static const char* const TEXT_MOVE_SPEED = "移动速度";
 
 static const char* const TEXT_SECTION_TIMING = "本帧耗时";
-static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线画出最近 100000 帧，横轴为启动以来的秒数，纵轴单位为毫秒，上下限取这些帧的最小值与最大值再各留一成余量";
+static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线画出最近 10 秒，横轴为启动以来的秒数，纵轴单位为毫秒，上下限取这段时间内帧的最小值与最大值再各留一成余量";
 
-// 曲线上画出最近多少个数据点，纵轴上下限也取自这一批数据
-static const int TIMING_PLOT_HISTORY_COUNT = 100000;
+// 曲线上画出最近多少秒的数据，横轴范围与纵轴上下限都取自这一批数据
+static const float TIMING_PLOT_VISIBLE_SECONDS = 10.0f;
 
 static const char* const TEXT_SECTION_WORKLOAD = "本帧工作量";
 static const char* const TEXT_TOTAL_INSTANCES = "实例总数 %d";
@@ -345,15 +345,16 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
         if (ImPlot::BeginPlot(plotId, ImVec2(-1.0f, 150.0f), ImPlotFlags_NoLegend)) {
             ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
 
-            // 纵轴范围与横轴取自同一批数据：画多少个点，就用这些点的最小值与最大值定上下限，
-            // 再上下各留一成余量。只看最近一百帧时，只要每隔一百多帧出现一个异常大的值，
-            // 纵轴范围就会在两种尺度之间反复跳变
+            // 横轴与纵轴都只看最近十秒的数据：横轴自动缩放到这段时间，纵轴上下限取这段时间
+            // 的最小值与最大值再各留一成余量。按时间取窗口而不是按帧数取，不同帧率下横轴跨度
+            // 一致，纵轴也不会把早就滚出画面的旧尖峰一直算进来
             const std::vector<float>& times = timing.historyTimeSeconds;
             const std::vector<float>& values = timing.historyValues[id];
-            const int totalCount = static_cast<int>(times.size());
-            const int visibleCount = std::min(totalCount, TIMING_PLOT_HISTORY_COUNT);
-            if (visibleCount > 0) {
-                const int startIndex = totalCount - visibleCount;
+            if (!times.empty()) {
+                const float windowStart = std::max(0.0f, times.back() - TIMING_PLOT_VISIBLE_SECONDS);
+                const int startIndex = static_cast<int>(
+                    std::lower_bound(times.begin(), times.end(), windowStart) - times.begin());
+                const int visibleCount = static_cast<int>(times.size()) - startIndex;
                 const float* valueBegin = values.data() + startIndex;
                 const auto bounds = std::minmax_element(valueBegin, valueBegin + visibleCount);
                 const double range =
