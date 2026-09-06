@@ -27,10 +27,9 @@ static const char* const TEXT_FAR_PLANE = "远裁剪面";
 static const char* const TEXT_MOVE_SPEED = "移动速度";
 
 static const char* const TEXT_SECTION_TIMING = "本帧耗时";
-static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线画出最近 100000 帧，横轴为启动以来的秒数，纵轴单位为毫秒，上下限取最近 100 帧的均值加减三倍标准差";
+static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线画出最近 100000 帧，横轴为启动以来的秒数，纵轴单位为毫秒，上下限取这些帧的最小值与最大值再各留一成余量";
 
-// 曲线上最多画出最近多少个数据点。上面的均值、标准差与纵轴上下限只看最近一百帧，画面上要
-// 看到更长时间的走势，超出纵轴范围的早期数据会被裁到画面之外
+// 曲线上画出最近多少个数据点，纵轴上下限也取自这一批数据
 static const int TIMING_PLOT_HISTORY_COUNT = 100000;
 
 static const char* const TEXT_SECTION_WORKLOAD = "本帧工作量";
@@ -346,22 +345,24 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
         if (ImPlot::BeginPlot(plotId, ImVec2(-1.0f, 150.0f), ImPlotFlags_NoLegend)) {
             ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
 
-            // 纵轴上下限取最近一百帧的均值加减三倍标准差，不交给 ImPlot 自动缩放。自动缩放
-            // 会把上下限拉到数据里的极端值：一个离群的尖峰或者启动阶段的一次性开销就足以把
-            // 纵轴撑开，稳定运行后的正常波动只占其中极小一段，看起来就是一条被压平的直线。
-            // 三倍标准差覆盖正态分布下几乎全部样本，同时把个别离群值挡在纵轴范围之外
-            const double halfRange =
-                std::max({window.standardDeviation * 3.0, window.mean * 0.02, 0.05});
-            ImPlot::SetupAxisLimits(ImAxis_Y1, std::max(0.0, window.mean - halfRange),
-                                    window.mean + halfRange, ImPlotCond_Always);
-
+            // 纵轴范围与横轴取自同一批数据：画多少个点，就用这些点的最小值与最大值定上下限，
+            // 再上下各留一成余量。只看最近一百帧时，只要每隔一百多帧出现一个异常大的值，
+            // 纵轴范围就会在两种尺度之间反复跳变
             const std::vector<float>& times = timing.historyTimeSeconds;
             const std::vector<float>& values = timing.historyValues[id];
             const int totalCount = static_cast<int>(times.size());
             const int visibleCount = std::min(totalCount, TIMING_PLOT_HISTORY_COUNT);
             if (visibleCount > 0) {
                 const int startIndex = totalCount - visibleCount;
-                ImPlot::PlotLine(name, times.data() + startIndex, values.data() + startIndex, visibleCount);
+                const float* valueBegin = values.data() + startIndex;
+                const auto bounds = std::minmax_element(valueBegin, valueBegin + visibleCount);
+                const double range =
+                    std::max(static_cast<double>(*bounds.second) - static_cast<double>(*bounds.first), 0.1);
+                const double margin = range * 0.1;
+                ImPlot::SetupAxisLimits(ImAxis_Y1,
+                                        std::max(0.0, static_cast<double>(*bounds.first) - margin),
+                                        static_cast<double>(*bounds.second) + margin, ImPlotCond_Always);
+                ImPlot::PlotLine(name, times.data() + startIndex, valueBegin, visibleCount);
             }
             ImPlot::EndPlot();
         }
