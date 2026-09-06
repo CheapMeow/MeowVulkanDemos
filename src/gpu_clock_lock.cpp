@@ -4,7 +4,10 @@
 #define NOMINMAX
 #include <windows.h>
 
+#include <GLFW/glfw3.h>
+
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -220,29 +223,110 @@ void detectGpuClockLockState(GpuClockLockState& state)
     state.lastAction = GpuClockLockAction::kDetected;
 }
 
+// 读一次实时频率，成功返回真并填好两个频率值，失败时 outResult 里带着 nvidia-smi 的输出
+static bool queryCurrentClocksMHz(uint32_t gpuIndex, NvidiaSmiResult& outResult, uint32_t& outCoreMHz,
+                                  uint32_t& outMemoryMHz)
+{
+    std::ostringstream args;
+    args << "-i " << gpuIndex << " --query-gpu=clocks.gr,clocks.mem --format=csv,noheader,nounits";
+    outResult = runNvidiaSmi(args.str());
+
+    const std::vector<std::string> lines = splitLines(outResult.output);
+    const std::vector<std::string> fields =
+        lines.empty() ? std::vector<std::string>() : splitCsvLine(lines.front());
+    const bool ok = outResult.launched && outResult.exitCode == 0 && fields.size() >= 2 &&
+                    isAllDigits(fields[0]) && isAllDigits(fields[1]);
+    if (!ok) {
+        return false;
+    }
+
+    outCoreMHz = static_cast<uint32_t>(std::atoi(fields[0].c_str()));
+    outMemoryMHz = static_cast<uint32_t>(std::atoi(fields[1].c_str()));
+    return true;
+}
+
 void queryLiveGpuClocks(GpuClockLockState& state)
 {
     if (!state.detected) {
         return;
     }
 
-    std::ostringstream args;
-    args << "-i " << state.gpuIndex << " --query-gpu=clocks.gr,clocks.mem --format=csv,noheader,nounits";
-    const NvidiaSmiResult result = runNvidiaSmi(args.str());
-
-    const std::vector<std::string> lines = splitLines(result.output);
-    const std::vector<std::string> fields = lines.empty() ? std::vector<std::string>() : splitCsvLine(lines.front());
-    const bool ok = result.launched && result.exitCode == 0 && fields.size() >= 2 && isAllDigits(fields[0]) &&
-                    isAllDigits(fields[1]);
-
-    if (ok) {
+    NvidiaSmiResult result;
+    uint32_t coreMHz = 0;
+    uint32_t memoryMHz = 0;
+    if (queryCurrentClocksMHz(state.gpuIndex, result, coreMHz, memoryMHz)) {
         state.clocksQueried = true;
-        state.currentCoreClockMHz = static_cast<uint32_t>(std::atoi(fields[0].c_str()));
-        state.currentMemoryClockMHz = static_cast<uint32_t>(std::atoi(fields[1].c_str()));
+        state.currentCoreClockMHz = coreMHz;
+        state.currentMemoryClockMHz = memoryMHz;
     } else {
         state.lastAction = GpuClockLockAction::kQueryFailed;
         state.lastActionDetail = combineDetail(result.output, std::string());
     }
+}
+
+static void gpuClockMonitorLoop(GpuClockMonitor& monitor, double startTime)
+{
+    while (true) {
+        std::unique_lock<std::mutex> lock(monitor.mutex);
+        monitor.wakeUp.wait_for(lock, std::chrono::seconds(GPU_CLOCK_SAMPLE_PERIOD_SECONDS),
+                                [&monitor] { return monitor.stopRequested; });
+        if (monitor.stopRequested) {
+            return;
+        }
+        // 采样期间不持锁，等待 nvidia-smi 的时间不会挡住界面读取历史
+        lock.unlock();
+
+        NvidiaSmiResult result;
+        uint32_t coreMHz = 0;
+        uint32_t memoryMHz = 0;
+        if (!queryCurrentClocksMHz(monitor.gpuIndex, result, coreMHz, memoryMHz)) {
+            continue;
+        }
+        // 时间戳取自与耗时曲线同一个时钟，两条曲线的横轴才能对齐
+        const float elapsedSeconds = static_cast<float>(glfwGetTime() - startTime);
+
+        lock.lock();
+        monitor.timeSeconds.push_back(elapsedSeconds);
+        monitor.coreClockMHz.push_back(static_cast<float>(coreMHz));
+        monitor.memoryClockMHz.push_back(static_cast<float>(memoryMHz));
+    }
+}
+
+void startGpuClockMonitor(GpuClockMonitor& monitor, const GpuClockLockState& state, double startTime)
+{
+    if (!state.detected) {
+        return;
+    }
+
+    monitor.detected = true;
+    monitor.gpuIndex = state.gpuIndex;
+    monitor.stopRequested = false;
+    monitor.timeSeconds.clear();
+    monitor.coreClockMHz.clear();
+    monitor.memoryClockMHz.clear();
+    monitor.worker = std::thread(gpuClockMonitorLoop, std::ref(monitor), startTime);
+}
+
+void stopGpuClockMonitor(GpuClockMonitor& monitor)
+{
+    if (!monitor.worker.joinable()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(monitor.mutex);
+        monitor.stopRequested = true;
+    }
+    monitor.wakeUp.notify_all();
+    monitor.worker.join();
+}
+
+void copyGpuClockSamples(const GpuClockMonitor& monitor, std::vector<float>& outTimeSeconds,
+                         std::vector<float>& outCoreClockMHz, std::vector<float>& outMemoryClockMHz)
+{
+    std::lock_guard<std::mutex> lock(monitor.mutex);
+    outTimeSeconds = monitor.timeSeconds;
+    outCoreClockMHz = monitor.coreClockMHz;
+    outMemoryClockMHz = monitor.memoryClockMHz;
 }
 
 void requestLockGpuClocks(GpuClockLockState& state)

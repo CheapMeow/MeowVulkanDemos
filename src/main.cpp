@@ -97,6 +97,9 @@ int main(int argc, char** argv)
     GpuClockLockState gpuClockLockState;
     detectGpuClockLockState(gpuClockLockState);
 
+    // 频率曲线由后台线程采样，测量模式下不启动，避免采样本身干扰被测的帧时间
+    GpuClockMonitor gpuClockMonitor;
+
     // 缓冲按容量分配，界面上滑动实例数量时不需要重建任何资源
     const uint32_t instanceCapacity = std::max(1000000u, initialInstanceCount);
     lightCapacity = std::max(lightCapacity, initialLightCount);
@@ -169,6 +172,10 @@ int main(int argc, char** argv)
     }
     bool captureDone = false;
 
+    if (interfaceEnabled) {
+        startGpuClockMonitor(gpuClockMonitor, gpuClockLockState, startTime);
+    }
+
     while (glfwWindowShouldClose(window) == 0) {
         glfwPollEvents();
 
@@ -191,7 +198,7 @@ int main(int argc, char** argv)
         if (interfaceEnabled) {
             beginUserInterfaceFrame();
             buildUserInterface(uiState, uiStatistics, timingStore, static_cast<int>(instanceCapacity),
-                               static_cast<int>(lightCapacity), gpuClockLockState);
+                               static_cast<int>(lightCapacity), gpuClockLockState, gpuClockMonitor);
         }
 
         const bool keyboardGoesToInterface = interfaceEnabled && userInterfaceWantsKeyboard();
@@ -315,6 +322,8 @@ int main(int argc, char** argv)
             break;
         }
     }
+
+    stopGpuClockMonitor(gpuClockMonitor);
 
     VK_CHECK(vkDeviceWaitIdle(ctx.device));
 

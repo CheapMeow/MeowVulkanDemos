@@ -32,7 +32,8 @@ void destroyUserInterface(const VulkanContext& ctx, UserInterface& ui);
 // 开始一帧界面，随后构建控件
 void beginUserInterfaceFrame();
 void buildUserInterface(UiState& state, const UiStatistics& statistics, const TimingStore& timing,
-                        int maxInstanceCount, int maxLightCount, GpuClockLockState& gpuClockLockState);
+                        int maxInstanceCount, int maxLightCount, GpuClockLockState& gpuClockLockState,
+                        GpuClockMonitor& gpuClockMonitor);
 // 结束一帧界面，把控件转成绘制数据
 void endUserInterfaceFrame();
 

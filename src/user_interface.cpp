@@ -52,6 +52,11 @@ static const char* const TEXT_GPU_CURRENT_CLOCKS = "上次查询：核心 %u MHz
 static const char* const TEXT_GPU_CLOCKS_NOT_QUERIED =
     "尚未查询当前频率。查询要启动 nvidia-smi 并阻塞主线程，因此不做定时轮询，只在按下按钮时查一次";
 static const char* const TEXT_GPU_QUERY_FAILED = "查询频率失败：%s";
+static const char* const TEXT_GPU_CORE_CLOCK_PLOT = "核心频率";
+static const char* const TEXT_GPU_MEMORY_CLOCK_PLOT = "显存频率";
+static const char* const TEXT_GPU_CLOCK_PLOT_HINT =
+    "下面两张图每 1 秒在后台线程采样一次，采样不占用主线程，等待 nvidia-smi 的时间不会进到帧时间里。"
+    "横轴与耗时曲线同为启动以来的秒数，同样只画最近十秒，纵轴单位为 MHz";
 static const char* const TEXT_GPU_TARGET_CORE = "目标核心频率";
 static const char* const TEXT_GPU_TARGET_MEMORY = "目标显存频率";
 static const char* const TEXT_GPU_LOCK_BUTTON = "锁频";
@@ -78,6 +83,7 @@ static const char* const ALL_INTERFACE_TEXTS[] = {
     TEXT_GPU_TARGET_CORE,     TEXT_GPU_TARGET_MEMORY,   TEXT_GPU_LOCK_BUTTON,       TEXT_GPU_UNLOCK_BUTTON,
     TEXT_GPU_LOCKED_STATUS,   TEXT_GPU_NOT_LOCKED_STATUS, TEXT_GPU_LOCK_FAILED,     TEXT_GPU_UNLOCK_FAILED,
     TEXT_GPU_QUERY_BUTTON,    TEXT_GPU_CLOCKS_NOT_QUERIED, TEXT_GPU_QUERY_FAILED,
+    TEXT_GPU_CORE_CLOCK_PLOT, TEXT_GPU_MEMORY_CLOCK_PLOT,  TEXT_GPU_CLOCK_PLOT_HINT,
     timingDisplayName(TIMING_FRAME),
     timingDisplayName(TIMING_CPU_CULL),
     timingDisplayName(TIMING_CPU_RECORD_BEGIN),
@@ -233,8 +239,45 @@ void beginUserInterfaceFrame()
     ImGui::NewFrame();
 }
 
+// 画一张只覆盖最近十秒的曲线，横轴自动缩放到这段时间，纵轴上下限取同一批数据的最小值与最大值
+// 再各向外留一成余量。曲线图高度要给够：坐标轴刻度文字加上四周留白会占掉近七十像素，高度只有
+// 七十像素时真正画曲线的区域只剩十几像素，纵轴范围怎么调都是被压平的一条线。坐标轴标题省掉，
+// 单位写进上方的说明文字，坐标轴上只留刻度数值
+static void plotRecentSeries(const char* name, const std::vector<float>& times,
+                             const std::vector<float>& values)
+{
+    ImGui::PushID(name);
+    char plotId[96];
+    std::snprintf(plotId, sizeof(plotId), "%s##plot", name);
+    if (ImPlot::BeginPlot(plotId, ImVec2(-1.0f, 150.0f), ImPlotFlags_NoLegend)) {
+        ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
+
+        if (!times.empty()) {
+            const float windowStart = std::max(0.0f, times.back() - TIMING_PLOT_VISIBLE_SECONDS);
+            const int startIndex = static_cast<int>(std::lower_bound(times.begin(), times.end(), windowStart) -
+                                                    times.begin());
+            const int visibleCount = static_cast<int>(times.size()) - startIndex;
+            const float* valueBegin = values.data() + startIndex;
+            const auto bounds = std::minmax_element(valueBegin, valueBegin + visibleCount);
+            const double minimum = static_cast<double>(*bounds.first);
+            const double maximum = static_cast<double>(*bounds.second);
+            // 长时间不变的量（例如锁频成功之后的频率）最大值减最小值是零，给一个最小跨度，
+            // 免得上下限相等画不出网格。跨度下限同时取最大值的一个百分点，百万赫兹量级与毫秒
+            // 量级都能得到合适的范围
+            const double range = std::max(maximum - minimum, std::max(std::abs(maximum) * 0.01, 0.1));
+            const double margin = range * 0.1;
+            ImPlot::SetupAxisLimits(ImAxis_Y1, std::max(0.0, minimum - margin), maximum + margin,
+                                    ImPlotCond_Always);
+            ImPlot::PlotLine(name, times.data() + startIndex, valueBegin, visibleCount);
+        }
+        ImPlot::EndPlot();
+    }
+    ImGui::PopID();
+}
+
 void buildUserInterface(UiState& state, const UiStatistics& statistics, const TimingStore& timing,
-                        int maxInstanceCount, int maxLightCount, GpuClockLockState& gpuClockLockState)
+                        int maxInstanceCount, int maxLightCount, GpuClockLockState& gpuClockLockState,
+                        GpuClockMonitor& gpuClockMonitor)
 {
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(520.0f, 860.0f), ImGuiCond_FirstUseEver);
@@ -334,6 +377,14 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
         } else {
             ImGui::TextUnformatted(TEXT_GPU_NOT_LOCKED_STATUS);
         }
+
+        ImGui::TextWrapped(TEXT_GPU_CLOCK_PLOT_HINT);
+        std::vector<float> clockTimeSeconds;
+        std::vector<float> coreClockMHz;
+        std::vector<float> memoryClockMHz;
+        copyGpuClockSamples(gpuClockMonitor, clockTimeSeconds, coreClockMHz, memoryClockMHz);
+        plotRecentSeries(TEXT_GPU_CORE_CLOCK_PLOT, clockTimeSeconds, coreClockMHz);
+        plotRecentSeries(TEXT_GPU_MEMORY_CLOCK_PLOT, clockTimeSeconds, memoryClockMHz);
     }
 
     ImGui::SeparatorText(TEXT_SECTION_TIMING);
@@ -351,38 +402,7 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
             ImGui::Text("%s   %7.3f ± %6.3f ms", name, window.mean, window.standardDeviation);
         }
 
-        ImGui::PushID(i);
-        char plotId[96];
-        std::snprintf(plotId, sizeof(plotId), "%s##plot", name);
-        // 曲线图高度要给够：坐标轴刻度文字加上四周留白会占掉近七十像素，高度只有七十像素时
-        // 真正画曲线的区域只剩十几像素，纵轴范围怎么调都是被压平的一条线。坐标轴标题省掉，
-        // 单位写进上方的说明文字，坐标轴上只留刻度数值
-        if (ImPlot::BeginPlot(plotId, ImVec2(-1.0f, 150.0f), ImPlotFlags_NoLegend)) {
-            ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
-
-            // 横轴与纵轴都只看最近十秒的数据：横轴自动缩放到这段时间，纵轴上下限取这段时间
-            // 的最小值与最大值再各留一成余量。按时间取窗口而不是按帧数取，不同帧率下横轴跨度
-            // 一致，纵轴也不会把早就滚出画面的旧尖峰一直算进来
-            const std::vector<float>& times = timing.historyTimeSeconds;
-            const std::vector<float>& values = timing.historyValues[id];
-            if (!times.empty()) {
-                const float windowStart = std::max(0.0f, times.back() - TIMING_PLOT_VISIBLE_SECONDS);
-                const int startIndex = static_cast<int>(
-                    std::lower_bound(times.begin(), times.end(), windowStart) - times.begin());
-                const int visibleCount = static_cast<int>(times.size()) - startIndex;
-                const float* valueBegin = values.data() + startIndex;
-                const auto bounds = std::minmax_element(valueBegin, valueBegin + visibleCount);
-                const double range =
-                    std::max(static_cast<double>(*bounds.second) - static_cast<double>(*bounds.first), 0.1);
-                const double margin = range * 0.1;
-                ImPlot::SetupAxisLimits(ImAxis_Y1,
-                                        std::max(0.0, static_cast<double>(*bounds.first) - margin),
-                                        static_cast<double>(*bounds.second) + margin, ImPlotCond_Always);
-                ImPlot::PlotLine(name, times.data() + startIndex, valueBegin, visibleCount);
-            }
-            ImPlot::EndPlot();
-        }
-        ImGui::PopID();
+        plotRecentSeries(name, timing.historyTimeSeconds, timing.historyValues[id]);
     }
     ImGui::EndChild();
 

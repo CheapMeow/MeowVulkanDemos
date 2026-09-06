@@ -1,7 +1,11 @@
 #pragma once
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 // 最近一次锁频相关操作的结果，界面据此选择要显示的文案
@@ -49,6 +53,35 @@ void detectGpuClockLockState(GpuClockLockState& state);
 // 只在界面上按下查询按钮时调用一次，更新当前实时频率。启动 nvidia-smi 会阻塞主线程
 // 几十到一百多毫秒，因此不做任何定时轮询，免得帧时间曲线被这种与绘制无关的因素干扰
 void queryLiveGpuClocks(GpuClockLockState& state);
+
+// 后台线程按固定间隔采样实时频率，界面上的频率曲线读这些样本
+struct GpuClockMonitor {
+    bool detected = false;
+    uint32_t gpuIndex = 0;
+
+    std::thread worker;
+    mutable std::mutex mutex;
+    std::condition_variable wakeUp;
+    bool stopRequested = false;
+
+    std::vector<float> timeSeconds;    // 采样时刻，程序启动以来经过的秒数
+    std::vector<float> coreClockMHz;
+    std::vector<float> memoryClockMHz;
+};
+
+// 采样间隔，单位秒
+enum { GPU_CLOCK_SAMPLE_PERIOD_SECONDS = 1 };
+
+// 启动后台采样线程。startTime 是程序启动时刻，采样时间戳以它为零点，与耗时曲线共用同一条横轴。
+// 探测不到显卡时不启动，界面上也就没有频率曲线
+void startGpuClockMonitor(GpuClockMonitor& monitor, const GpuClockLockState& state, double startTime);
+
+// 通知采样线程结束并等待它退出
+void stopGpuClockMonitor(GpuClockMonitor& monitor);
+
+// 界面每帧调用，在锁内拷出采样历史
+void copyGpuClockSamples(const GpuClockMonitor& monitor, std::vector<float>& outTimeSeconds,
+                         std::vector<float>& outCoreClockMHz, std::vector<float>& outMemoryClockMHz);
 
 // 按下拉框当前选中的档位调用 nvidia-smi -lgc/-lmc 锁频
 void requestLockGpuClocks(GpuClockLockState& state);
