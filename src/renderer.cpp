@@ -803,10 +803,13 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     uint32_t imageIndex = 0;
     const VkResult acquireResult = vkAcquireNextImageKHR(ctx.device, ctx.swapchain, UINT64_MAX,
                                                          frame.imageAvailable, VK_NULL_HANDLE, &imageIndex);
-    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR) {
+    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
         return false;
     }
-    VK_CHECK(acquireResult);
+    if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
+        // SUBOPTIMAL 只是尺寸略有出入，仍然可以继续画，其余结果才是真正的错误
+        VK_CHECK(acquireResult);
+    }
 
     if (renderer.imageFences[imageIndex] != VK_NULL_HANDLE) {
         VK_CHECK(vkWaitForFences(ctx.device, 1, &renderer.imageFences[imageIndex], VK_TRUE, UINT64_MAX));
@@ -1060,10 +1063,12 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     presentInfo.pSwapchains = &ctx.swapchain;
     presentInfo.pImageIndices = &imageIndex;
     const VkResult presentResult = vkQueuePresentKHR(ctx.queue, &presentInfo);
-    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR) {
         return false;
     }
-    VK_CHECK(presentResult);
+    if (presentResult != VK_SUCCESS && presentResult != VK_SUBOPTIMAL_KHR) {
+        VK_CHECK(presentResult);
+    }
 
     return true;
 }

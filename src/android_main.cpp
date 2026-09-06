@@ -63,6 +63,9 @@ static void initializeRendererStack(AppState& state, android_app* app)
     createWindowSurface(state.ctx, app->window);
     createGraphicsDevice(state.ctx);
     createSwapchain(state.ctx);
+    LOG_I("initialized window %dx%d, swapchain extent %ux%u", ANativeWindow_getWidth(app->window),
+          ANativeWindow_getHeight(app->window), state.ctx.swapchainExtent.width,
+          state.ctx.swapchainExtent.height);
 
     const std::vector<unsigned char> meshBytes = readAssetBytes("backpack/backpack.obj");
     loadObjFromMemory(meshBytes, state.mesh);
@@ -111,6 +114,26 @@ static void rebuildSwapchain(AppState& state)
     createSwapchain(state.ctx);
     recreateSwapchainTargets(state.ctx, state.renderer);
     state.swapchainReady = true;
+    LOG_I("swapchain rebuilt to %ux%u (window %dx%d)", state.ctx.swapchainExtent.width,
+          state.ctx.swapchainExtent.height, ANativeWindow_getWidth(state.ctx.window),
+          ANativeWindow_getHeight(state.ctx.window));
+}
+
+// 交换链的尺寸必须与窗口一致。横屏启动时窗口尺寸可能晚一步才定型，
+// 或者旋转后系统没有发重建事件，每帧对一次，不一致就重建交换链
+static void syncSwapchainToWindow(AppState& state)
+{
+    const int windowWidth = ANativeWindow_getWidth(state.ctx.window);
+    const int windowHeight = ANativeWindow_getHeight(state.ctx.window);
+    if (windowWidth == 0 || windowHeight == 0) {
+        return;
+    }
+    if (static_cast<uint32_t>(windowWidth) != state.ctx.swapchainExtent.width ||
+        static_cast<uint32_t>(windowHeight) != state.ctx.swapchainExtent.height) {
+        LOG_I("window %dx%d differs from swapchain %ux%u, rebuilding", windowWidth, windowHeight,
+              state.ctx.swapchainExtent.width, state.ctx.swapchainExtent.height);
+        rebuildSwapchain(state);
+    }
 }
 
 static void teardownSwapchain(AppState& state)
@@ -190,6 +213,9 @@ static void drawOneFrame(AppState& state)
                        state.gpuClockLockState, state.gpuClockMonitor);
     endUserInterfaceFrame();
 
+    // 渲染前先保证交换链尺寸与窗口一致，横屏输出不会被当成竖屏绘制后拉伸
+    syncSwapchainToWindow(state);
+
     state.camera.farPlane = state.uiState.farPlane;
     state.camera.moveSpeed = state.uiState.cameraMoveSpeed;
     // 安卓端相机保持初始化时的位置与朝向，没有键盘输入
@@ -239,8 +265,9 @@ static void drawOneFrame(AppState& state)
     if (currentTime - state.lastPrintSeconds >= 2.0) {
         const TimingWindow& frameWindow = state.timingStore.window[TIMING_FRAME];
         const double fps = frameWindow.mean > 0.0 ? 1000.0 / frameWindow.mean : 0.0;
-        LOG_I("frame %.1f FPS, visible %u, draw commands %u", fps, statistics.visibleInstanceCount,
-              statistics.drawCallCount);
+        LOG_I("frame %.1f FPS, visible %u, draw commands %u, swapchain %ux%u", fps,
+              statistics.visibleInstanceCount, statistics.drawCallCount, state.ctx.swapchainExtent.width,
+              state.ctx.swapchainExtent.height);
         state.lastPrintSeconds = currentTime;
     }
 }

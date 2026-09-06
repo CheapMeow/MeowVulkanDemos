@@ -326,7 +326,9 @@ void createSwapchain(VulkanContext& ctx)
     swapchainInfo.imageArrayLayers = 1;
     swapchainInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     swapchainInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    swapchainInfo.preTransform = capabilities.currentTransform;
+    // 变换交给合成器处理：声明 IDENTITY，不按 currentTransform 预旋转渲染内容，
+    // 否则横屏内容会被当成已旋转的缓冲再旋转一次，输出变成转过的竖屏画面
+    swapchainInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     swapchainInfo.presentMode = chosenPresentMode;
     swapchainInfo.clipped = VK_TRUE;
