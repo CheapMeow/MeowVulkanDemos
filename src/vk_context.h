@@ -40,4 +40,8 @@ void destroyVulkanContext(VulkanContext& ctx);
 void createSwapchain(VulkanContext& ctx);
 void destroySwapchain(VulkanContext& ctx);
 
+// 窗口尺寸变化后重建交换链：等设备上没有未完成的工作，再销毁旧的交换链与图像视图。
+// 调用之前必须保证没有任何一帧还在使用旧的交换链图像
+void recreateSwapchain(VulkanContext& ctx);
+
 uint32_t findMemoryType(const VulkanContext& ctx, uint32_t typeBits, VkMemoryPropertyFlags properties);

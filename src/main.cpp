@@ -15,6 +15,22 @@
 #include <string>
 #include <vector>
 
+// 交换链以及所有跟它的尺寸、图像数量绑定的资源都要在窗口尺寸变化后重建。
+// 抓帧缓冲的大小也由交换链尺寸决定，抓帧还没发生时一并重建
+static void rebuildSwapchainResources(VulkanContext& ctx, Renderer& renderer, GpuBuffer& captureBuffer,
+                                      bool capturePending)
+{
+    recreateSwapchain(ctx);
+    recreateSwapchainTargets(ctx, renderer);
+
+    if (capturePending) {
+        if (captureBuffer.buffer != VK_NULL_HANDLE) {
+            destroyBuffer(ctx, captureBuffer);
+        }
+        createCaptureBuffer(ctx, captureBuffer);
+    }
+}
+
 // 统计行与测量报告里的路径名称
 static const char* drawPathName(DrawPath drawPath)
 {
@@ -130,9 +146,6 @@ int main(int argc, char** argv)
 
     std::vector<uint32_t> visibleIndices(instanceCapacity);
 
-    const float aspectRatio =
-        static_cast<float>(ctx.swapchainExtent.width) / static_cast<float>(ctx.swapchainExtent.height);
-
     uint64_t frameCounter = 0;
     double previousTime = glfwGetTime();
     double lastPrintTime = previousTime;
@@ -158,6 +171,22 @@ int main(int argc, char** argv)
 
     while (glfwWindowShouldClose(window) == 0) {
         glfwPollEvents();
+
+        // 窗口最小化时表面尺寸为零，没有可以绘制的内容，等窗口恢复
+        int framebufferWidth = 0;
+        int framebufferHeight = 0;
+        glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+        if (framebufferWidth == 0 || framebufferHeight == 0) {
+            if (autoExitSeconds > 0.0 && glfwGetTime() - startTime >= autoExitSeconds) {
+                break;
+            }
+            continue;
+        }
+
+        if (static_cast<uint32_t>(framebufferWidth) != ctx.swapchainExtent.width ||
+            static_cast<uint32_t>(framebufferHeight) != ctx.swapchainExtent.height) {
+            rebuildSwapchainResources(ctx, renderer, captureBuffer, captureRequested && !captureDone);
+        }
 
         if (interfaceEnabled) {
             beginUserInterfaceFrame();
@@ -207,6 +236,10 @@ int main(int argc, char** argv)
         const uint32_t activeLightCount = static_cast<uint32_t>(uiState.activeLightCount);
         updateLights(camera.position, activeLightCount, 48.0f, 110.0f, lights);
 
+        // 宽高比跟着交换链走，窗口尺寸变化后立刻生效
+        const float aspectRatio = static_cast<float>(ctx.swapchainExtent.width) /
+                                  static_cast<float>(ctx.swapchainExtent.height);
+
         CameraUniform cameraUniform;
         fillCameraUniform(camera, aspectRatio, activeInstanceCount, mesh.boundsRadius, activeLightCount,
                           cameraUniform);
@@ -226,8 +259,13 @@ int main(int argc, char** argv)
         input.captureBuffer = shouldCaptureThisFrame ? &captureBuffer : nullptr;
 
         FrameStatistics statistics = {};
-        drawFrame(ctx, renderer, frameCounter, input, cameraUniform, lights, instances, visibleIndices.data(),
-                  statistics);
+        const bool frameDrawn = drawFrame(ctx, renderer, frameCounter, input, cameraUniform, lights, instances,
+                                          visibleIndices.data(), statistics);
+        if (!frameDrawn) {
+            // 交换链在获取图像或者呈现时失效，重建后从下一帧继续，本帧不计入统计
+            rebuildSwapchainResources(ctx, renderer, captureBuffer, captureRequested && !captureDone);
+            continue;
+        }
         if (shouldCaptureThisFrame) {
             captureDone = true;
         }

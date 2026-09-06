@@ -150,6 +150,48 @@ static void createGBufferTargets(const VulkanContext& ctx, Renderer& renderer)
     VK_CHECK(vkCreateFramebuffer(ctx.device, &framebufferInfo, nullptr, &renderer.gbuffer.framebuffer));
 }
 
+static void destroyGBufferTargets(const VulkanContext& ctx, Renderer& renderer)
+{
+    vkDestroyFramebuffer(ctx.device, renderer.gbuffer.framebuffer, nullptr);
+    destroyTexture(ctx, renderer.gbuffer.depth);
+    destroyTexture(ctx, renderer.gbuffer.positionMetallic);
+    destroyTexture(ctx, renderer.gbuffer.normalRoughness);
+    destroyTexture(ctx, renderer.gbuffer.albedoOcclusion);
+}
+
+static void createPresentTargets(const VulkanContext& ctx, Renderer& renderer)
+{
+    renderer.presentFramebuffers.resize(ctx.swapchainImageCount);
+    renderer.presentSemaphores.resize(ctx.swapchainImageCount);
+    renderer.imageFences.resize(ctx.swapchainImageCount, VK_NULL_HANDLE);
+    for (uint32_t i = 0; i < ctx.swapchainImageCount; ++i) {
+        VkFramebufferCreateInfo framebufferInfo = {};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = renderer.lightingRenderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = &ctx.swapchainImageViews[i];
+        framebufferInfo.width = ctx.swapchainExtent.width;
+        framebufferInfo.height = ctx.swapchainExtent.height;
+        framebufferInfo.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(ctx.device, &framebufferInfo, nullptr, &renderer.presentFramebuffers[i]));
+
+        VkSemaphoreCreateInfo semaphoreInfo = {};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        VK_CHECK(vkCreateSemaphore(ctx.device, &semaphoreInfo, nullptr, &renderer.presentSemaphores[i]));
+    }
+}
+
+static void destroyPresentTargets(const VulkanContext& ctx, Renderer& renderer)
+{
+    for (uint32_t i = 0; i < renderer.presentFramebuffers.size(); ++i) {
+        vkDestroyFramebuffer(ctx.device, renderer.presentFramebuffers[i], nullptr);
+        vkDestroySemaphore(ctx.device, renderer.presentSemaphores[i], nullptr);
+    }
+    renderer.presentFramebuffers.clear();
+    renderer.presentSemaphores.clear();
+    renderer.imageFences.clear();
+}
+
 static void createDescriptorLayouts(const VulkanContext& ctx, Renderer& renderer)
 {
     VkDescriptorSetLayoutBinding sceneBindings[2] = {};
@@ -560,24 +602,7 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
     createLightingRenderPass(ctx, renderer);
     createGBufferTargets(ctx, renderer);
 
-    renderer.presentFramebuffers.resize(ctx.swapchainImageCount);
-    renderer.presentSemaphores.resize(ctx.swapchainImageCount);
-    renderer.imageFences.resize(ctx.swapchainImageCount, VK_NULL_HANDLE);
-    for (uint32_t i = 0; i < ctx.swapchainImageCount; ++i) {
-        VkFramebufferCreateInfo framebufferInfo = {};
-        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = renderer.lightingRenderPass;
-        framebufferInfo.attachmentCount = 1;
-        framebufferInfo.pAttachments = &ctx.swapchainImageViews[i];
-        framebufferInfo.width = ctx.swapchainExtent.width;
-        framebufferInfo.height = ctx.swapchainExtent.height;
-        framebufferInfo.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(ctx.device, &framebufferInfo, nullptr, &renderer.presentFramebuffers[i]));
-
-        VkSemaphoreCreateInfo semaphoreInfo = {};
-        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        VK_CHECK(vkCreateSemaphore(ctx.device, &semaphoreInfo, nullptr, &renderer.presentSemaphores[i]));
-    }
+    createPresentTargets(ctx, renderer);
 
     createDescriptorLayouts(ctx, renderer);
     createDescriptorPool(ctx, renderer);
@@ -706,16 +731,8 @@ void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
     vkDestroyDescriptorSetLayout(ctx.device, renderer.visibleSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(ctx.device, renderer.sceneSetLayout, nullptr);
 
-    for (uint32_t i = 0; i < renderer.presentFramebuffers.size(); ++i) {
-        vkDestroyFramebuffer(ctx.device, renderer.presentFramebuffers[i], nullptr);
-        vkDestroySemaphore(ctx.device, renderer.presentSemaphores[i], nullptr);
-    }
-
-    vkDestroyFramebuffer(ctx.device, renderer.gbuffer.framebuffer, nullptr);
-    destroyTexture(ctx, renderer.gbuffer.depth);
-    destroyTexture(ctx, renderer.gbuffer.positionMetallic);
-    destroyTexture(ctx, renderer.gbuffer.normalRoughness);
-    destroyTexture(ctx, renderer.gbuffer.albedoOcclusion);
+    destroyPresentTargets(ctx, renderer);
+    destroyGBufferTargets(ctx, renderer);
 
     vkDestroyRenderPass(ctx.device, renderer.lightingRenderPass, nullptr);
     vkDestroyRenderPass(ctx.device, renderer.gbufferRenderPass, nullptr);
@@ -732,7 +749,28 @@ void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
     destroyBuffer(ctx, renderer.vertexBuffer);
 }
 
-void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, const FrameInput& input,
+void recreateSwapchainTargets(const VulkanContext& ctx, Renderer& renderer)
+{
+    destroyPresentTargets(ctx, renderer);
+    destroyGBufferTargets(ctx, renderer);
+
+    createGBufferTargets(ctx, renderer);
+    createPresentTargets(ctx, renderer);
+
+    // G-Buffer 的图像视图已经换成新的一批，光照通道的描述符要重新指向它们。
+    // 渲染通道与管线只跟格式有关，尺寸是动态状态，不需要重建
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        FrameResources& frame = renderer.frames[i];
+        writeImageDescriptor(ctx, frame.lightingSet, 0, renderer.gbuffer.albedoOcclusion.view,
+                             renderer.material.sampler);
+        writeImageDescriptor(ctx, frame.lightingSet, 1, renderer.gbuffer.normalRoughness.view,
+                             renderer.material.sampler);
+        writeImageDescriptor(ctx, frame.lightingSet, 2, renderer.gbuffer.positionMetallic.view,
+                             renderer.material.sampler);
+    }
+}
+
+bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, const FrameInput& input,
                const CameraUniform& cameraUniform, const std::vector<LightData>& lights,
                const std::vector<InstanceData>& instances, uint32_t* visibleIndices,
                FrameStatistics& outStatistics)
@@ -752,8 +790,12 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     }
 
     uint32_t imageIndex = 0;
-    VK_CHECK(vkAcquireNextImageKHR(ctx.device, ctx.swapchain, UINT64_MAX, frame.imageAvailable, VK_NULL_HANDLE,
-                                   &imageIndex));
+    const VkResult acquireResult = vkAcquireNextImageKHR(ctx.device, ctx.swapchain, UINT64_MAX,
+                                                         frame.imageAvailable, VK_NULL_HANDLE, &imageIndex);
+    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR) {
+        return false;
+    }
+    VK_CHECK(acquireResult);
 
     if (renderer.imageFences[imageIndex] != VK_NULL_HANDLE) {
         VK_CHECK(vkWaitForFences(ctx.device, 1, &renderer.imageFences[imageIndex], VK_TRUE, UINT64_MAX));
@@ -992,5 +1034,11 @@ void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &ctx.swapchain;
     presentInfo.pImageIndices = &imageIndex;
-    VK_CHECK(vkQueuePresentKHR(ctx.queue, &presentInfo));
+    const VkResult presentResult = vkQueuePresentKHR(ctx.queue, &presentInfo);
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
+        return false;
+    }
+    VK_CHECK(presentResult);
+
+    return true;
 }

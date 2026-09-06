@@ -116,6 +116,10 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
                     const std::vector<InstanceData>& instances, uint32_t lightCapacity);
 void destroyRenderer(const VulkanContext& ctx, Renderer& renderer);
 
+// 交换链重建之后调用。G-Buffer 的附件、呈现用的帧缓冲与信号量都跟随交换链尺寸与图像数量，
+// 需要重新创建；渲染通道与管线只跟格式有关，不受影响
+void recreateSwapchainTargets(const VulkanContext& ctx, Renderer& renderer);
+
 // 一帧的绘制输入
 struct FrameInput {
     DrawPath drawPath;
@@ -127,7 +131,9 @@ struct FrameInput {
     const GpuBuffer* captureBuffer;
 };
 
-void drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, const FrameInput& input,
+// 返回 false 表示交换链已经失效（窗口尺寸变化或图像不再适配），这一帧没有绘制任何内容，
+// 调用方重建交换链后再画下一帧；outStatistics 在这种情况下没有填完，不要使用
+bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCounter, const FrameInput& input,
                const CameraUniform& cameraUniform, const std::vector<LightData>& lights,
                const std::vector<InstanceData>& instances, uint32_t* visibleIndices,
                FrameStatistics& outStatistics);

@@ -297,7 +297,15 @@ void destroySwapchain(VulkanContext& ctx)
         vkDestroyImageView(ctx.device, ctx.swapchainImageViews[i], nullptr);
     }
     vkDestroySwapchainKHR(ctx.device, ctx.swapchain, nullptr);
+    ctx.swapchain = VK_NULL_HANDLE;
     ctx.swapchainImageCount = 0;
+}
+
+void recreateSwapchain(VulkanContext& ctx)
+{
+    VK_CHECK(vkDeviceWaitIdle(ctx.device));
+    destroySwapchain(ctx);
+    createSwapchain(ctx);
 }
 
 uint32_t findMemoryType(const VulkanContext& ctx, uint32_t typeBits, VkMemoryPropertyFlags properties)
