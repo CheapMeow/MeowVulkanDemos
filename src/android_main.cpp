@@ -64,7 +64,7 @@ static void initializeRendererStack(AppState& state, android_app* app)
     createGraphicsDevice(state.ctx);
     createSwapchain(state.ctx);
 
-    const std::vector<unsigned char> meshBytes = readAssetBytes("assets/backpack/backpack.obj");
+    const std::vector<unsigned char> meshBytes = readAssetBytes("backpack/backpack.obj");
     loadObjFromMemory(meshBytes, state.mesh);
 
     buildInstances(state.instanceCapacity, 8.0f, state.instances);
@@ -138,6 +138,8 @@ static void handleAppCommand(android_app* app, int32_t command)
                 recreateSurfaceAndSwapchain(state);
             }
             state.windowValid = true;
+            // 焦点事件可能先于窗口到达，窗口就绪时强制进入绘制状态，避免一直阻塞等事件
+            state.animating = true;
             break;
 
         case APP_CMD_TERM_WINDOW:
@@ -262,11 +264,13 @@ void android_main(android_app* app)
     const double frameBudgetSeconds = 1.0 / 60.0;
 
     while (!state.destroying) {
-        // 有事件就处理事件，事件之间允许阻塞，让出 CPU
-        int events = 0;
-        android_poll_source* source = nullptr;
-        const int pollTimeout = state.animating ? 0 : -1;
+        // 逐条处理事件。没有事件可处理时：需要画帧就立即进入绘制（超时 0），
+        // 否则阻塞等下一个事件（超时 -1）。超时值每轮都按当前状态重新计算，
+        // 事件回调里 animating 由假变真之后才能立刻开始画帧
         while (true) {
+            const int pollTimeout = (state.animating && state.swapchainReady) ? 0 : -1;
+            int events = 0;
+            android_poll_source* source = nullptr;
             const int result = ALooper_pollOnce(pollTimeout, nullptr, &events,
                                                  reinterpret_cast<void**>(&source));
             if (result < 0) {

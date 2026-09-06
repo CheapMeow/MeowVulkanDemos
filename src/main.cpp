@@ -144,7 +144,7 @@ int main(int argc, char** argv)
     createSwapchain(ctx);
 
     MeshData mesh;
-    loadObjFromMemory(readAssetBytes("assets/backpack/backpack.obj"), mesh);
+    loadObjFromMemory(readAssetBytes("backpack/backpack.obj"), mesh);
 
     std::vector<InstanceData> instances;
     buildInstances(instanceCapacity, 8.0f, instances);

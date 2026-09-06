@@ -42,16 +42,23 @@ android {
 
 // 模型与贴图来自仓库根目录的 assets 目录。CMake 编译着色器时已经把 .spv 写进
 // src/main/assets/shaders，这里负责在打包前把其余资源复制进 src/main/assets。
-// 这些步骤在宿主上执行，路径是本机开发环境的路径，安卓端运行时只读 APK 里的 assets。
+// APK 的 assets 目录就是 AAssetManager 的根，因此包内的路径不带 assets/ 前缀。
+// 这些步骤在宿主上执行，安卓端运行时只读 APK 里的 assets。
 def assetsDir = file("src/main/assets")
 tasks.register("copyDemoAssets", Copy) {
-    from layout.projectDirectory.dir("../../assets")
-    into assetsDir
+    // 每次重做，防止上次构建遗留的旧副本
+    doFirst {
+        delete assetsDir
+    }
+    from layout.projectDirectory.dir("../../assets/backpack")
+    into file("src/main/assets/backpack")
     outputs.upToDateWhen { false }
 }
 
-// 界面字体。桌面端直接读系统字体，安卓端字体必须随包，这里从 Windows 字体目录复制一份
+// 界面字体。桌面端直接读系统字体，安卓端字体必须随包，这里从 Windows 字体目录复制一份。
+// copyDemoAssets 会清空整个 assets 目录，字体复制必须排在它后面
 tasks.register("copyInterfaceFont", Copy) {
+    dependsOn "copyDemoAssets"
     from "C:/Windows/Fonts/msyh.ttc"
     into file("src/main/assets/fonts")
     outputs.upToDateWhen { false }

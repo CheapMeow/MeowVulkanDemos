@@ -9,6 +9,7 @@ struct AAssetManager;
 void setAndroidAssetManager(AAssetManager* assetManager);
 #endif
 
-// 读一个随包资源，name 是仓库内的相对路径，例如 assets/backpack/backpack.obj、
-// shaders/gbuffer.vert.spv。安卓从 APK 的 assets 目录读，桌面从构建目录读
+// 读一个随包资源，name 是相对根目录的路径，例如 backpack/backpack.obj、
+// shaders/gbuffer.vert.spv。安卓的 AAssetManager 以 APK 的 assets 目录为根，
+// 因此这里的名字一律不带 assets/ 前缀
 std::vector<unsigned char> readAssetBytes(const char* name);

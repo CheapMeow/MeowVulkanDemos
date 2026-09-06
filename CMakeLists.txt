@@ -120,7 +120,7 @@ else()
         "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
     )
 
-    file(COPY assets DESTINATION "${CMAKE_BINARY_DIR}")
+    file(COPY assets/backpack DESTINATION "${CMAKE_BINARY_DIR}")
 
     set(ASSET_ROOT_DIR "${CMAKE_BINARY_DIR}")
     set(SHADER_BINARY_DIR "${CMAKE_BINARY_DIR}/shaders")

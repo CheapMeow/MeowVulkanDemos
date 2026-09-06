@@ -590,13 +590,13 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, renderer.instanceBuffer);
     uploadBufferData(ctx, renderer.instanceBuffer, instances.data(), instanceBytes);
 
-    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/diffuse.jpg"), true, renderer.material.albedo);
-    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/normal.png"), false, renderer.material.normal);
-    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/specular.jpg"), false,
+    createTextureFromMemory(ctx, readAssetBytes("backpack/diffuse.jpg"), true, renderer.material.albedo);
+    createTextureFromMemory(ctx, readAssetBytes("backpack/normal.png"), false, renderer.material.normal);
+    createTextureFromMemory(ctx, readAssetBytes("backpack/specular.jpg"), false,
                             renderer.material.metallic);
-    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/roughness.jpg"), false,
+    createTextureFromMemory(ctx, readAssetBytes("backpack/roughness.jpg"), false,
                             renderer.material.roughness);
-    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/ao.jpg"), false,
+    createTextureFromMemory(ctx, readAssetBytes("backpack/ao.jpg"), false,
                             renderer.material.ambientOcclusion);
     renderer.material.sampler = createLinearSampler(ctx, renderer.material.albedo.mipLevels);
 
