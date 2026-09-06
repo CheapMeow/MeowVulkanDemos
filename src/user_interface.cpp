@@ -27,7 +27,11 @@ static const char* const TEXT_FAR_PLANE = "远裁剪面";
 static const char* const TEXT_MOVE_SPEED = "移动速度";
 
 static const char* const TEXT_SECTION_TIMING = "本帧耗时";
-static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线同样展示最近 100 帧，横轴为启动以来的秒数，纵轴单位为毫秒，上下限取均值加减三倍标准差";
+static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线画出最近 100000 帧，横轴为启动以来的秒数，纵轴单位为毫秒，上下限取最近 100 帧的均值加减三倍标准差";
+
+// 曲线上最多画出最近多少个数据点。上面的均值、标准差与纵轴上下限只看最近一百帧，画面上要
+// 看到更长时间的走势，超出纵轴范围的早期数据会被裁到画面之外
+static const int TIMING_PLOT_HISTORY_COUNT = 100000;
 
 static const char* const TEXT_SECTION_WORKLOAD = "本帧工作量";
 static const char* const TEXT_TOTAL_INSTANCES = "实例总数 %d";
@@ -351,12 +355,10 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
             ImPlot::SetupAxisLimits(ImAxis_Y1, std::max(0.0, window.mean - halfRange),
                                     window.mean + halfRange, ImPlotCond_Always);
 
-            // 横轴只喂入最近一百帧，与上面的均值和标准差取自同一批样本，画出来的点与纵轴范围
-            // 严格对应，不会出现大半截数据被裁到画面之外的情况
             const std::vector<float>& times = timing.historyTimeSeconds;
             const std::vector<float>& values = timing.historyValues[id];
             const int totalCount = static_cast<int>(times.size());
-            const int visibleCount = std::min(totalCount, static_cast<int>(TIMING_WINDOW_CAPACITY));
+            const int visibleCount = std::min(totalCount, TIMING_PLOT_HISTORY_COUNT);
             if (visibleCount > 0) {
                 const int startIndex = totalCount - visibleCount;
                 ImPlot::PlotLine(name, times.data() + startIndex, values.data() + startIndex, visibleCount);
