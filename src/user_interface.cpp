@@ -47,7 +47,11 @@ static const char* const TEXT_GUIDE_DRAG = "拖动标题栏可以移动本面板
 static const char* const TEXT_SECTION_GPU_LOCK = "GPU 锁频";
 static const char* const TEXT_GPU_NOT_DETECTED = "未探测到支持锁频的 NVIDIA 显卡：%s";
 static const char* const TEXT_GPU_DEVICE_NAME = "显卡 %s（设备 #%u）";
-static const char* const TEXT_GPU_CURRENT_CLOCKS = "当前频率：核心 %u MHz，显存 %u MHz";
+static const char* const TEXT_GPU_QUERY_BUTTON = "查询当前频率";
+static const char* const TEXT_GPU_CURRENT_CLOCKS = "上次查询：核心 %u MHz，显存 %u MHz";
+static const char* const TEXT_GPU_CLOCKS_NOT_QUERIED =
+    "尚未查询当前频率。查询要启动 nvidia-smi 并阻塞主线程，因此不做定时轮询，只在按下按钮时查一次";
+static const char* const TEXT_GPU_QUERY_FAILED = "查询频率失败：%s";
 static const char* const TEXT_GPU_TARGET_CORE = "目标核心频率";
 static const char* const TEXT_GPU_TARGET_MEMORY = "目标显存频率";
 static const char* const TEXT_GPU_LOCK_BUTTON = "锁频";
@@ -73,6 +77,7 @@ static const char* const ALL_INTERFACE_TEXTS[] = {
     TEXT_SECTION_GPU_LOCK,    TEXT_GPU_NOT_DETECTED,    TEXT_GPU_DEVICE_NAME,       TEXT_GPU_CURRENT_CLOCKS,
     TEXT_GPU_TARGET_CORE,     TEXT_GPU_TARGET_MEMORY,   TEXT_GPU_LOCK_BUTTON,       TEXT_GPU_UNLOCK_BUTTON,
     TEXT_GPU_LOCKED_STATUS,   TEXT_GPU_NOT_LOCKED_STATUS, TEXT_GPU_LOCK_FAILED,     TEXT_GPU_UNLOCK_FAILED,
+    TEXT_GPU_QUERY_BUTTON,    TEXT_GPU_CLOCKS_NOT_QUERIED, TEXT_GPU_QUERY_FAILED,
     timingDisplayName(TIMING_FRAME),
     timingDisplayName(TIMING_CPU_CULL),
     timingDisplayName(TIMING_CPU_RECORD_BEGIN),
@@ -254,8 +259,18 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
         ImGui::TextWrapped(TEXT_GPU_NOT_DETECTED, gpuClockLockState.lastActionDetail.c_str());
     } else {
         ImGui::Text(TEXT_GPU_DEVICE_NAME, gpuClockLockState.gpuName.c_str(), gpuClockLockState.gpuIndex);
-        ImGui::Text(TEXT_GPU_CURRENT_CLOCKS, gpuClockLockState.currentCoreClockMHz,
-                    gpuClockLockState.currentMemoryClockMHz);
+
+        if (ImGui::Button(TEXT_GPU_QUERY_BUTTON)) {
+            queryLiveGpuClocks(gpuClockLockState);
+        }
+        if (gpuClockLockState.clocksQueried) {
+            ImGui::Text(TEXT_GPU_CURRENT_CLOCKS, gpuClockLockState.currentCoreClockMHz,
+                        gpuClockLockState.currentMemoryClockMHz);
+        } else if (gpuClockLockState.lastAction == GpuClockLockAction::kQueryFailed) {
+            ImGui::TextWrapped(TEXT_GPU_QUERY_FAILED, gpuClockLockState.lastActionDetail.c_str());
+        } else {
+            ImGui::TextWrapped(TEXT_GPU_CLOCKS_NOT_QUERIED);
+        }
 
         char comboLabel[32];
 

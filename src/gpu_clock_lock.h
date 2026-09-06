@@ -9,6 +9,7 @@ enum class GpuClockLockAction {
     kNone,
     kDetectFailed,
     kDetected,
+    kQueryFailed,
     kLocked,
     kLockFailed,
     kUnlocked,
@@ -36,17 +37,18 @@ struct GpuClockLockState {
     uint32_t lockedCoreClockMHz = 0;
     uint32_t lockedMemoryClockMHz = 0;
 
+    bool clocksQueried = false;         // 是否已经成功查询过一次实时频率
     uint32_t currentCoreClockMHz = 0;   // 最近一次实时查询到的核心频率
     uint32_t currentMemoryClockMHz = 0; // 最近一次实时查询到的显存频率
-    double lastPolledSeconds = -1.0;    // 上一次实时查询的时间戳，用于节流
 };
 
 // 程序启动时调用一次：探测第一块 NVIDIA 显卡、读取它支持的核心/显存频率档位
 // 探测不到显卡或 nvidia-smi 不可用时把 detected 置为 false 并记录原因，不终止程序
 void detectGpuClockLockState(GpuClockLockState& state);
 
-// 每帧调用，内部按 currentSeconds 节流到大约一秒一次，更新当前实时频率
-void pollLiveGpuClocks(GpuClockLockState& state, double currentSeconds);
+// 只在界面上按下查询按钮时调用一次，更新当前实时频率。启动 nvidia-smi 会阻塞主线程
+// 几十到一百多毫秒，因此不做任何定时轮询，免得帧时间曲线被这种与绘制无关的因素干扰
+void queryLiveGpuClocks(GpuClockLockState& state);
 
 // 按下拉框当前选中的档位调用 nvidia-smi -lgc/-lmc 锁频
 void requestLockGpuClocks(GpuClockLockState& state);

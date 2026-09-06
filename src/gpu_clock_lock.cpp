@@ -220,33 +220,29 @@ void detectGpuClockLockState(GpuClockLockState& state)
     state.lastAction = GpuClockLockAction::kDetected;
 }
 
-void pollLiveGpuClocks(GpuClockLockState& state, double currentSeconds)
+void queryLiveGpuClocks(GpuClockLockState& state)
 {
     if (!state.detected) {
         return;
     }
-    if (state.lastPolledSeconds >= 0.0 && currentSeconds - state.lastPolledSeconds < 1.0) {
-        return;
-    }
-    state.lastPolledSeconds = currentSeconds;
 
     std::ostringstream args;
     args << "-i " << state.gpuIndex << " --query-gpu=clocks.gr,clocks.mem --format=csv,noheader,nounits";
     const NvidiaSmiResult result = runNvidiaSmi(args.str());
-    if (!result.launched || result.exitCode != 0) {
-        return;
-    }
 
     const std::vector<std::string> lines = splitLines(result.output);
-    if (lines.empty()) {
-        return;
+    const std::vector<std::string> fields = lines.empty() ? std::vector<std::string>() : splitCsvLine(lines.front());
+    const bool ok = result.launched && result.exitCode == 0 && fields.size() >= 2 && isAllDigits(fields[0]) &&
+                    isAllDigits(fields[1]);
+
+    if (ok) {
+        state.clocksQueried = true;
+        state.currentCoreClockMHz = static_cast<uint32_t>(std::atoi(fields[0].c_str()));
+        state.currentMemoryClockMHz = static_cast<uint32_t>(std::atoi(fields[1].c_str()));
+    } else {
+        state.lastAction = GpuClockLockAction::kQueryFailed;
+        state.lastActionDetail = combineDetail(result.output, std::string());
     }
-    const std::vector<std::string> fields = splitCsvLine(lines.front());
-    if (fields.size() < 2 || !isAllDigits(fields[0]) || !isAllDigits(fields[1])) {
-        return;
-    }
-    state.currentCoreClockMHz = static_cast<uint32_t>(std::atoi(fields[0].c_str()));
-    state.currentMemoryClockMHz = static_cast<uint32_t>(std::atoi(fields[1].c_str()));
 }
 
 void requestLockGpuClocks(GpuClockLockState& state)

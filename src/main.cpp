@@ -190,7 +190,6 @@ int main(int argc, char** argv)
 
         if (interfaceEnabled) {
             beginUserInterfaceFrame();
-            pollLiveGpuClocks(gpuClockLockState, glfwGetTime());
             buildUserInterface(uiState, uiStatistics, timingStore, static_cast<int>(instanceCapacity),
                                static_cast<int>(lightCapacity), gpuClockLockState);
         }
