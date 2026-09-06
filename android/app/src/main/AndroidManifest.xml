@@ -10,7 +10,7 @@
             android:name="android.app.NativeActivity"
             android:label="Vulkan Indirect Draw Demo"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"
-            android:screenOrientation="fullUser"
+            android:screenOrientation="landscape"
             android:exported="true">
 
             <meta-data
