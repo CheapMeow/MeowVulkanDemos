@@ -32,7 +32,7 @@ scripts\build.bat
 
 `scripts\fetch_assets.bat` 下载 obj 模型与配套的 PBR 纹理（albedo、法线、金属度、粗糙度、环境光遮蔽）到 `assets/backpack`。
 
-`scripts\build.bat` 调用 Visual Studio 自带的 CMake 与 Ninja 完成配置与编译，并用 `glslc` 把 `shaders` 下的 GLSL 编译成 SPIR-V 到 `build/shaders`。
+`scripts\build.bat` 调用 Visual Studio 自带的 CMake 与 Ninja 完成配置与编译，并用 `glslc` 把 `shaders` 下的 GLSL 编译成 SPIR-V 到 `build/shaders`。Visual Studio 的安装路径从环境变量 `VS_DIR` 读取，脚本里不含本机路径；全局环境不满足时，在 `scripts\` 下放一个不入库的 `local_env.bat` 来覆盖（见下方安卓构建一节对这套机制的统一说明）。
 
 ## 安卓构建
 
@@ -40,7 +40,7 @@ scripts\build.bat
 scripts\build_android.bat
 ```
 
-产物是 `android\app\build\outputs\apk\debug\app-debug.apk`。构建脚本里不含任何本机路径，依赖路径全部从环境变量读取：`JAVA_HOME` 指向 JDK 17，`ANDROID_HOME` 指向 Android SDK。当机器的全局环境变量不满足要求时，在 `scripts\` 下放一个不入库的 `local_android_env.bat` 来覆盖，例如：
+产物是 `android\app\build\outputs\apk\debug\app-debug.apk`。构建脚本里不含任何本机路径，依赖路径全部从环境变量读取：`JAVA_HOME` 指向 JDK 17，`ANDROID_HOME` 指向 Android SDK。当机器的全局环境变量不满足要求时，在 `scripts\` 下放一个不入库的 `local_env.bat` 来覆盖，例如：
 
 ```
 set "JAVA_HOME=D:\path\to\jdk17"
@@ -48,7 +48,13 @@ set "ANDROID_HOME=D:\path\to\android-sdk"
 set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
 ```
 
-`scripts\build_android.bat` 检测到该文件存在就先执行它，再校验两个变量是否指向有效的 JDK 与 SDK。需要的 SDK 组件是 platform 35、build-tools 34、NDK 27.0.12077973 与 CMake 3.22.1，全部由 Gradle 按 `android\app\build.gradle` 里的声明使用，缺失时用 `sdkmanager` 安装。
+同一个文件也被桌面构建使用，可以把 Visual Studio 路径一并写进去：
+
+```
+set "VS_DIR=D:\path\to\Visual Studio\2019\Community"
+```
+
+`scripts\build.bat` 与 `scripts\build_android.bat` 检测到 `local_env.bat` 存在就先执行它，再校验相关变量是否指向有效安装。需要的 SDK 组件是 platform 35、build-tools 34、NDK 27.0.12077973 与 CMake 3.22.1，全部由 Gradle 按 `android\app\build.gradle` 里的声明使用，缺失时用 `sdkmanager` 安装。
 
 工程结构：
 

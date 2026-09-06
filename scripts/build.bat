@@ -1,12 +1,35 @@
 @echo off
 setlocal
 
-set VS_DIR=D:\path\to\Visual Studio\2019\Community
-set CMAKE_EXE=%VS_DIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe
-set NINJA_EXE=%VS_DIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe
+rem Desktop build entry point. Dependency paths come from environment variables:
+rem   VS_DIR -> Visual Studio installation root. The build uses the CMake and Ninja
+rem             bundled with it and the MSVC toolchain through vcvars64.bat.
+rem This file contains no machine specific path. When the global environment does
+rem not match this machine, place a local_env.bat in this same folder (gitignored)
+rem that sets the variables before this script runs, e.g.:
+rem     set "VS_DIR=D:\path\to\Visual Studio\2019\Community"
+
 set ROOT_DIR=%~dp0..
 
-call "%VS_DIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
+if exist "%~dp0local_env.bat" (
+    call "%~dp0local_env.bat"
+)
+
+if not defined VS_DIR (
+    echo VS_DIR is not set: point it at a Visual Studio installation
+    exit /b 1
+)
+
+set VCVARS=%VS_DIR%\VC\Auxiliary\Build\vcvars64.bat
+if not exist "%VCVARS%" (
+    echo VS_DIR does not contain a Visual Studio installation: %VS_DIR%
+    exit /b 1
+)
+
+set CMAKE_EXE=%VS_DIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe
+set NINJA_EXE=%VS_DIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe
+
+call "%VCVARS%" >nul
 if errorlevel 1 exit /b 1
 
 if not exist "%ROOT_DIR%\build" (

@@ -12,4 +12,4 @@ android/app/.cxx/
 android/app/src/main/assets/
 
 # 传递本机依赖路径的脚本，不入库
-scripts/local_android_env.bat
+scripts/local_env.bat

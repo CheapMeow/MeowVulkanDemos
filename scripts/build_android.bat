@@ -5,17 +5,17 @@ rem Android build entry point. Dependency paths come from environment variables:
 rem   JAVA_HOME      -> JDK 17 installation (AGP requires 17)
 rem   ANDROID_HOME   -> Android SDK root
 rem The build intentionally has no machine specific path in it. When the global
-rem environment does not match this machine, place a local_android_env.bat in
-rem this same folder (gitignored) that sets the variables before this script
-rem runs, e.g.:
+rem environment does not match this machine, place a local_env.bat in this
+rem same folder (gitignored) that sets the variables before this script runs,
+rem e.g.:
 rem     set "JAVA_HOME=D:\path\to\jdk17"
 rem     set "ANDROID_HOME=D:\path\to\android-sdk"
 
 set ROOT_DIR=%~dp0..
 set ANDROID_DIR=%ROOT_DIR%\android
 
-if exist "%~dp0local_android_env.bat" (
-    call "%~dp0local_android_env.bat"
+if exist "%~dp0local_env.bat" (
+    call "%~dp0local_env.bat"
 )
 
 if not defined JAVA_HOME (
