@@ -1,9 +1,9 @@
 #include "renderer.h"
 
+#include "asset_file.h"
+#include "timing.h"
 #include "user_interface.h"
 #include "vk_check.h"
-
-#include <GLFW/glfw3.h>
 
 #include <cstddef>
 #include <cstring>
@@ -349,8 +349,8 @@ static void createGBufferPipeline(const VulkanContext& ctx, Renderer& renderer)
     layoutInfo.pSetLayouts = setLayouts;
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.gbufferPipelineLayout));
 
-    VkShaderModule vertexModule = loadShaderModule(ctx, std::string(SHADER_BINARY_DIR) + "/gbuffer.vert.spv");
-    VkShaderModule fragmentModule = loadShaderModule(ctx, std::string(SHADER_BINARY_DIR) + "/gbuffer.frag.spv");
+    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/gbuffer.vert.spv"));
+    VkShaderModule fragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/gbuffer.frag.spv"));
 
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -461,8 +461,8 @@ static void createLightingPipeline(const VulkanContext& ctx, Renderer& renderer)
     layoutInfo.pSetLayouts = setLayouts;
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.lightingPipelineLayout));
 
-    VkShaderModule vertexModule = loadShaderModule(ctx, std::string(SHADER_BINARY_DIR) + "/fullscreen.vert.spv");
-    VkShaderModule fragmentModule = loadShaderModule(ctx, std::string(SHADER_BINARY_DIR) + "/lighting.frag.spv");
+    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/fullscreen.vert.spv"));
+    VkShaderModule fragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/lighting.frag.spv"));
 
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -548,7 +548,7 @@ static void createCullPipeline(const VulkanContext& ctx, Renderer& renderer)
     layoutInfo.pSetLayouts = setLayouts;
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.cullPipelineLayout));
 
-    VkShaderModule computeModule = loadShaderModule(ctx, std::string(SHADER_BINARY_DIR) + "/cull.comp.spv");
+    VkShaderModule computeModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/cull.comp.spv"));
 
     VkPipelineShaderStageCreateInfo stage = {};
     stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -590,12 +590,14 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, renderer.instanceBuffer);
     uploadBufferData(ctx, renderer.instanceBuffer, instances.data(), instanceBytes);
 
-    const std::string assetDirectory = std::string(PROJECT_ROOT_DIR) + "/assets/backpack/";
-    createTextureFromFile(ctx, assetDirectory + "diffuse.jpg", true, renderer.material.albedo);
-    createTextureFromFile(ctx, assetDirectory + "normal.png", false, renderer.material.normal);
-    createTextureFromFile(ctx, assetDirectory + "specular.jpg", false, renderer.material.metallic);
-    createTextureFromFile(ctx, assetDirectory + "roughness.jpg", false, renderer.material.roughness);
-    createTextureFromFile(ctx, assetDirectory + "ao.jpg", false, renderer.material.ambientOcclusion);
+    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/diffuse.jpg"), true, renderer.material.albedo);
+    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/normal.png"), false, renderer.material.normal);
+    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/specular.jpg"), false,
+                            renderer.material.metallic);
+    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/roughness.jpg"), false,
+                            renderer.material.roughness);
+    createTextureFromMemory(ctx, readAssetBytes("assets/backpack/ao.jpg"), false,
+                            renderer.material.ambientOcclusion);
     renderer.material.sampler = createLinearSampler(ctx, renderer.material.albedo.mipLevels);
 
     createGBufferRenderPass(ctx, renderer);
@@ -692,20 +694,26 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
                              renderer.material.sampler);
         writeBufferDescriptor(ctx, frame.lightingSet, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.lightBuffer);
 
+#ifndef __ANDROID__
         VkQueryPoolCreateInfo queryPoolInfo = {};
         queryPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
         queryPoolInfo.queryCount = 2;
         VK_CHECK(vkCreateQueryPool(ctx.device, &queryPoolInfo, nullptr, &frame.timestampPool));
         frame.timestampsValid = false;
+#endif
     }
+
+    initVulkanMarkers(ctx.instance, renderer.markers);
 }
 
 void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
 {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         FrameResources& frame = renderer.frames[i];
+#ifndef __ANDROID__
         vkDestroyQueryPool(ctx.device, frame.timestampPool, nullptr);
+#endif
         destroyBuffer(ctx, frame.visibleCountReadbackBuffer);
         destroyBuffer(ctx, frame.indirectBuffer);
         destroyBuffer(ctx, frame.gpuVisibleBuffer);
@@ -781,6 +789,8 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
 
     // 上一次使用本组资源的那一帧已经完成，可以读取它的计时与可见数量
     outStatistics.gpuMilliseconds = 0.0;
+#ifndef __ANDROID__
+    // 安卓移动 GPU 的时间戳查询经常不可用或者精度很差，设备时间不测，界面上一律显示为零
     if (frame.timestampsValid) {
         uint64_t timestamps[2] = { 0, 0 };
         VK_CHECK(vkGetQueryPoolResults(ctx.device, frame.timestampPool, 0, 2, sizeof(timestamps), timestamps,
@@ -788,6 +798,7 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         outStatistics.gpuMilliseconds = static_cast<double>(timestamps[1] - timestamps[0]) *
                                         static_cast<double>(renderer.timestampPeriodNanoseconds) / 1000000.0;
     }
+#endif
 
     uint32_t imageIndex = 0;
     const VkResult acquireResult = vkAcquireNextImageKHR(ctx.device, ctx.swapchain, UINT64_MAX,
@@ -813,14 +824,14 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         // indirect 路径读取上一轮同组资源写回的可见数量，仅用于显示
         cpuVisibleCount = *static_cast<const uint32_t*>(frame.visibleCountReadbackBuffer.mapped);
     } else {
-        const double cullStart = glfwGetTime();
+        const double cullStart = nowSeconds();
         cpuVisibleCount = cullInstancesOnCpu(instances, input.activeInstanceCount, cameraUniform.frustumPlanes,
                                              renderer.boundsRadius, visibleIndices);
         std::memcpy(frame.cpuVisibleBuffer.mapped, visibleIndices, sizeof(uint32_t) * cpuVisibleCount);
-        outStatistics.cpuCullMilliseconds = (glfwGetTime() - cullStart) * 1000.0;
+        outStatistics.cpuCullMilliseconds = (nowSeconds() - cullStart) * 1000.0;
     }
 
-    const double recordBeginStart = glfwGetTime();
+    const double recordBeginStart = nowSeconds();
 
     VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
 
@@ -829,13 +840,16 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo));
 
+#ifndef __ANDROID__
     vkCmdResetQueryPool(frame.commandBuffer, frame.timestampPool, 0, 2);
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.timestampPool, 0);
+#endif
 
-    outStatistics.cpuRecordBeginMilliseconds = (glfwGetTime() - recordBeginStart) * 1000.0;
+    outStatistics.cpuRecordBeginMilliseconds = (nowSeconds() - recordBeginStart) * 1000.0;
 
-    const double cullDispatchStart = glfwGetTime();
+    const double cullDispatchStart = nowSeconds();
     if (input.drawPath == DRAW_PATH_INDIRECT) {
+        beginCommandLabel(renderer.markers, frame.commandBuffer, "cull dispatch");
         // 实例数量清零后由计算着色器用原子累加填充
         vkCmdFillBuffer(frame.commandBuffer, frame.indirectBuffer.buffer,
                         offsetof(VkDrawIndexedIndirectCommand, instanceCount), sizeof(uint32_t), 0);
@@ -881,11 +895,13 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         countCopy.size = sizeof(uint32_t);
         vkCmdCopyBuffer(frame.commandBuffer, frame.indirectBuffer.buffer,
                         frame.visibleCountReadbackBuffer.buffer, 1, &countCopy);
+        endCommandLabel(renderer.markers, frame.commandBuffer);
     }
     outStatistics.cpuRecordCullDispatchMilliseconds =
-        input.drawPath == DRAW_PATH_INDIRECT ? (glfwGetTime() - cullDispatchStart) * 1000.0 : 0.0;
+        input.drawPath == DRAW_PATH_INDIRECT ? (nowSeconds() - cullDispatchStart) * 1000.0 : 0.0;
 
-    const double gbufferPassStart = glfwGetTime();
+    const double gbufferPassStart = nowSeconds();
+    beginCommandLabel(renderer.markers, frame.commandBuffer, "gbuffer pass");
 
     VkViewport viewport = {};
     viewport.width = static_cast<float>(ctx.swapchainExtent.width);
@@ -940,9 +956,11 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     }
 
     vkCmdEndRenderPass(frame.commandBuffer);
-    outStatistics.cpuRecordGBufferPassMilliseconds = (glfwGetTime() - gbufferPassStart) * 1000.0;
+    endCommandLabel(renderer.markers, frame.commandBuffer);
+    outStatistics.cpuRecordGBufferPassMilliseconds = (nowSeconds() - gbufferPassStart) * 1000.0;
 
-    const double lightingPassStart = glfwGetTime();
+    const double lightingPassStart = nowSeconds();
+    beginCommandLabel(renderer.markers, frame.commandBuffer, "lighting pass");
 
     VkRenderPassBeginInfo lightingBegin = {};
     lightingBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -959,17 +977,20 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.lightingPipelineLayout,
                             0, 2, lightingSets, 0, nullptr);
     vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
-    outStatistics.cpuRecordLightingPassMilliseconds = (glfwGetTime() - lightingPassStart) * 1000.0;
+    outStatistics.cpuRecordLightingPassMilliseconds = (nowSeconds() - lightingPassStart) * 1000.0;
 
-    const double uiStart = glfwGetTime();
+    const double uiStart = nowSeconds();
     if (input.drawUserInterface) {
+        beginCommandLabel(renderer.markers, frame.commandBuffer, "ui");
         recordUserInterfaceCommands(frame.commandBuffer);
+        endCommandLabel(renderer.markers, frame.commandBuffer);
     }
 
     vkCmdEndRenderPass(frame.commandBuffer);
-    outStatistics.cpuRecordUiMilliseconds = (glfwGetTime() - uiStart) * 1000.0;
+    endCommandLabel(renderer.markers, frame.commandBuffer);
+    outStatistics.cpuRecordUiMilliseconds = (nowSeconds() - uiStart) * 1000.0;
 
-    const double captureStart = glfwGetTime();
+    const double captureStart = nowSeconds();
     if (input.captureBuffer != nullptr) {
         VkImageMemoryBarrier toTransferSource = {};
         toTransferSource.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -1004,10 +1025,12 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &backToPresent);
     }
     outStatistics.cpuRecordCaptureMilliseconds =
-        input.captureBuffer != nullptr ? (glfwGetTime() - captureStart) * 1000.0 : 0.0;
+        input.captureBuffer != nullptr ? (nowSeconds() - captureStart) * 1000.0 : 0.0;
 
-    const double submitStart = glfwGetTime();
+    const double submitStart = nowSeconds();
+#ifndef __ANDROID__
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.timestampPool, 1);
+#endif
 
     VK_CHECK(vkEndCommandBuffer(frame.commandBuffer));
 
@@ -1022,9 +1045,11 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &renderer.presentSemaphores[imageIndex];
     VK_CHECK(vkQueueSubmit(ctx.queue, 1, &submitInfo, frame.inFlight));
-    outStatistics.cpuRecordSubmitMilliseconds = (glfwGetTime() - submitStart) * 1000.0;
+    outStatistics.cpuRecordSubmitMilliseconds = (nowSeconds() - submitStart) * 1000.0;
 
+#ifndef __ANDROID__
     frame.timestampsValid = true;
+#endif
     outStatistics.visibleInstanceCount = cpuVisibleCount;
 
     VkPresentInfoKHR presentInfo = {};

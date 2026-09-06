@@ -2,6 +2,7 @@
 
 #include "obj_loader.h"
 #include "scene.h"
+#include "vk_marker.h"
 #include "vk_resources.h"
 
 #include <vector>
@@ -93,6 +94,8 @@ struct Renderer {
     VkPipeline cullPipeline;
 
     float timestampPeriodNanoseconds;
+
+    VulkanMarkers markers;  // 命令缓冲上的调试标记，RenderDoc 按名字分段显示耗时
 
     FrameResources frames[MAX_FRAMES_IN_FLIGHT];
 };

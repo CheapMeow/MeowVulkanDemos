@@ -2,6 +2,10 @@
 
 #include "vk_check.h"
 
+#ifdef __ANDROID__
+#include <android/native_window.h>
+#endif
+
 #include <cstring>
 #include <vector>
 
@@ -18,17 +22,47 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugMessengerCallback(
     return VK_FALSE;
 }
 
+// 扩展在设备上不一定存在，只有枚举得到的才往里加，缺了就按没有处理
+static bool isInstanceExtensionAvailable(const char* extensionName)
+{
+    uint32_t propertyCount = 0;
+    VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &propertyCount, nullptr));
+    std::vector<VkExtensionProperties> properties(propertyCount);
+    VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &propertyCount, properties.data()));
+
+    for (uint32_t i = 0; i < propertyCount; ++i) {
+        if (std::strcmp(properties[i].extensionName, extensionName) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void createInstance(VulkanContext& ctx, bool enableValidation)
 {
+    std::vector<const char*> extensions;
+
+#ifndef __ANDROID__
     uint32_t glfwExtensionCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     if (glfwExtensions == nullptr) {
         FATAL("cannot obtain the instance extensions required by GLFW");
     }
+    extensions.assign(glfwExtensions, glfwExtensions + glfwExtensionCount);
+#else
+    extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+#endif
 
-    std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-    if (enableValidation) {
+    // 命令标记要用这个扩展，它在带调试层与多数移动端驱动上都有
+    if (isInstanceExtensionAvailable(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        ctx.debugUtilsEnabled = true;
+    } else {
+        ctx.debugUtilsEnabled = false;
+    }
+    if (enableValidation && !ctx.debugUtilsEnabled) {
+        FATAL("validation was requested but VK_EXT_debug_utils is not available");
     }
 
     const char* validationLayer = "VK_LAYER_KHRONOS_validation";
@@ -39,7 +73,12 @@ static void createInstance(VulkanContext& ctx, bool enableValidation)
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "None";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    // 安卓要覆盖只支持 1.1 的设备，桌面保持 1.2
+#ifdef __ANDROID__
+    appInfo.apiVersion = VK_API_VERSION_1_1;
+#else
     appInfo.apiVersion = VK_API_VERSION_1_2;
+#endif
 
     VkInstanceCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -168,22 +207,49 @@ static void createLogicalDevice(VulkanContext& ctx)
     VK_CHECK(vkCreateCommandPool(ctx.device, &poolInfo, nullptr, &ctx.commandPool));
 }
 
-void createVulkanContext(VulkanContext& ctx, GLFWwindow* window, bool enableValidation)
+void createVulkanContext(VulkanContext& ctx, bool enableValidation)
 {
     ctx = VulkanContext();
-    ctx.window = window;
-
     createInstance(ctx, enableValidation);
-    VK_CHECK(glfwCreateWindowSurface(ctx.instance, window, nullptr, &ctx.surface));
+}
+
+void createGraphicsDevice(VulkanContext& ctx)
+{
     pickPhysicalDevice(ctx);
     createLogicalDevice(ctx);
+}
+
+#ifndef __ANDROID__
+void createWindowSurface(VulkanContext& ctx, GLFWwindow* window)
+{
+    ctx.window = window;
+    VK_CHECK(glfwCreateWindowSurface(ctx.instance, window, nullptr, &ctx.surface));
+}
+#else
+void createWindowSurface(VulkanContext& ctx, ANativeWindow* window)
+{
+    ctx.window = window;
+
+    VkAndroidSurfaceCreateInfoKHR surfaceInfo = {};
+    surfaceInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+    surfaceInfo.window = window;
+    VK_CHECK(vkCreateAndroidSurfaceKHR(ctx.instance, &surfaceInfo, nullptr, &ctx.surface));
+}
+#endif
+
+void destroyWindowSurface(VulkanContext& ctx)
+{
+    if (ctx.surface != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(ctx.instance, ctx.surface, nullptr);
+        ctx.surface = VK_NULL_HANDLE;
+    }
 }
 
 void destroyVulkanContext(VulkanContext& ctx)
 {
     vkDestroyCommandPool(ctx.device, ctx.commandPool, nullptr);
     vkDestroyDevice(ctx.device, nullptr);
-    vkDestroySurfaceKHR(ctx.instance, ctx.surface, nullptr);
+    destroyWindowSurface(ctx);
 
     if (ctx.debugMessenger != VK_NULL_HANDLE) {
         PFN_vkDestroyDebugUtilsMessengerEXT destroyMessenger =
@@ -230,11 +296,16 @@ void createSwapchain(VulkanContext& ctx)
 
     VkExtent2D extent = capabilities.currentExtent;
     if (extent.width == UINT32_MAX) {
+#ifndef __ANDROID__
         int width = 0;
         int height = 0;
         glfwGetFramebufferSize(ctx.window, &width, &height);
         extent.width = static_cast<uint32_t>(width);
         extent.height = static_cast<uint32_t>(height);
+#else
+        extent.width = static_cast<uint32_t>(ANativeWindow_getWidth(ctx.window));
+        extent.height = static_cast<uint32_t>(ANativeWindow_getHeight(ctx.window));
+#endif
     }
 
     uint32_t imageCount = capabilities.minImageCount + 1;

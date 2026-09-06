@@ -1,3 +1,4 @@
+#include "asset_file.h"
 #include "console.h"
 #include "frame_capture.h"
 #include "gpu_clock_lock.h"
@@ -137,11 +138,13 @@ int main(int argc, char** argv)
     }
 
     VulkanContext ctx = {};
-    createVulkanContext(ctx, window, true);
+    createVulkanContext(ctx, true);
+    createWindowSurface(ctx, window);
+    createGraphicsDevice(ctx);
     createSwapchain(ctx);
 
     MeshData mesh;
-    loadObj(std::string(PROJECT_ROOT_DIR) + "/assets/backpack/backpack.obj", mesh);
+    loadObjFromMemory(readAssetBytes("assets/backpack/backpack.obj"), mesh);
 
     std::vector<InstanceData> instances;
     buildInstances(instanceCapacity, 8.0f, instances);
@@ -169,7 +172,7 @@ int main(int argc, char** argv)
     std::vector<uint32_t> visibleIndices(instanceCapacity);
 
     uint64_t frameCounter = 0;
-    double previousTime = glfwGetTime();
+    double previousTime = nowSeconds();
     double lastPrintTime = previousTime;
     const double startTime = previousTime;
 
@@ -203,7 +206,7 @@ int main(int argc, char** argv)
         int framebufferHeight = 0;
         glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
         if (framebufferWidth == 0 || framebufferHeight == 0) {
-            if (autoExitSeconds > 0.0 && glfwGetTime() - startTime >= autoExitSeconds) {
+            if (autoExitSeconds > 0.0 && nowSeconds() - startTime >= autoExitSeconds) {
                 break;
             }
             continue;
@@ -231,16 +234,16 @@ int main(int argc, char** argv)
         const bool spaceIsPressed =
             !keyboardGoesToInterface && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         const bool switchByTimer =
-            switchEverySeconds > 0.0 && glfwGetTime() - lastSwitchTime >= switchEverySeconds;
+            switchEverySeconds > 0.0 && nowSeconds() - lastSwitchTime >= switchEverySeconds;
         if ((spaceIsPressed && !spaceWasPressed) || switchByTimer) {
             // 三条路径依次轮换
             uiState.drawPath = static_cast<DrawPath>((static_cast<int>(uiState.drawPath) + 1) % DRAW_PATH_COUNT);
-            lastSwitchTime = glfwGetTime();
+            lastSwitchTime = nowSeconds();
             resetTimingWindows(timingStore);
         }
         spaceWasPressed = spaceIsPressed;
 
-        const double currentTime = glfwGetTime();
+        const double currentTime = nowSeconds();
         const float deltaSeconds = static_cast<float>(currentTime - previousTime);
         previousTime = currentTime;
 
@@ -254,7 +257,19 @@ int main(int argc, char** argv)
         camera.farPlane = uiState.farPlane;
         camera.moveSpeed = uiState.cameraMoveSpeed;
         if (!keyboardGoesToInterface) {
-            updateCamera(camera, window, deltaSeconds);
+            CameraInput cameraInput = {};
+            cameraInput.turnLeft = glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS;
+            cameraInput.turnRight = glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS;
+            cameraInput.turnUp = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
+            cameraInput.turnDown = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
+            cameraInput.moveForward = glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
+            cameraInput.moveBack = glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
+            cameraInput.moveLeft = glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
+            cameraInput.moveRight = glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
+            cameraInput.moveUp = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
+            cameraInput.moveDown = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
+            cameraInput.fast = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+            updateCamera(camera, cameraInput, deltaSeconds);
         }
 
         const uint32_t activeInstanceCount = static_cast<uint32_t>(uiState.activeInstanceCount);

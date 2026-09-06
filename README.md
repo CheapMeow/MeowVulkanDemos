@@ -1,6 +1,6 @@
 # Vulkan Indirect Draw 对比示例
 
-Windows 平台上的 Vulkan 延迟渲染示例，用同一份场景、同一份着色器，对比三条几何提交路径：
+Windows 与安卓平台上的 Vulkan 延迟渲染示例，用同一份场景、同一份着色器，对比三条几何提交路径：
 
 - 逐实例路径：主机遍历全部实例做视锥剔除，为每个可见实例记录一条 `vkCmdDrawIndexed`
 - 实例化路径：主机做同样的剔除，全部可见实例合并成一条 `vkCmdDrawIndexed`，实例数量为可见数量
@@ -14,13 +14,13 @@ Windows 平台上的 Vulkan 延迟渲染示例，用同一份场景、同一份�
 
 | 库 | 用途 |
 | --- | --- |
-| `external/glfw` | 窗口与输入 |
+| `external/glfw` | 窗口与输入（仅桌面构建使用） |
 | `external/glm` | 矩阵与向量运算 |
 | `external/stb` | 读取 jpg/png 纹理、写出抓取的画面 |
 | `external/imgui` | 参数控制面板与耗时显示 |
 | `external/implot` | 耗时曲线绘制 |
 
-Vulkan 头文件、`vulkan-1.lib` 与 `glslc.exe` 来自本机安装的 Vulkan SDK，路径由 CMake 变量 `VULKAN_SDK_DIR` 指定，默认 `D:/path/to/VulkanSDK`。
+桌面的 Vulkan 头文件、`vulkan-1.lib` 与 `glslc.exe` 来自本机安装的 Vulkan SDK，路径由 CMake 变量 `VULKAN_SDK_DIR` 指定，默认 `D:/path/to/VulkanSDK`。安卓构建不需要 Vulkan SDK：头文件与 `libvulkan.so` 由 NDK 提供，`glslc.exe` 仍然在宿主机上编译着色器，只是 SPIR-V 的目标版本按平台区分（桌面 1.2，安卓 1.1）。
 
 ## 准备与构建
 
@@ -33,6 +33,45 @@ scripts\build.bat
 `scripts\fetch_assets.bat` 下载 obj 模型与配套的 PBR 纹理（albedo、法线、金属度、粗糙度、环境光遮蔽）到 `assets/backpack`。
 
 `scripts\build.bat` 调用 Visual Studio 自带的 CMake 与 Ninja 完成配置与编译，并用 `glslc` 把 `shaders` 下的 GLSL 编译成 SPIR-V 到 `build/shaders`。
+
+## 安卓构建
+
+```
+scripts\build_android.bat
+```
+
+产物是 `android\app\build\outputs\apk\debug\app-debug.apk`。构建脚本里不含任何本机路径，依赖路径全部从环境变量读取：`JAVA_HOME` 指向 JDK 17，`ANDROID_HOME` 指向 Android SDK。当机器的全局环境变量不满足要求时，在 `scripts\` 下放一个不入库的 `local_android_env.bat` 来覆盖，例如：
+
+```
+set "JAVA_HOME=D:\path\to\jdk17"
+set "ANDROID_HOME=D:\path\to\android-sdk"
+set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
+```
+
+`scripts\build_android.bat` 检测到该文件存在就先执行它，再校验两个变量是否指向有效的 JDK 与 SDK。需要的 SDK 组件是 platform 35、build-tools 34、NDK 27.0.12077973 与 CMake 3.22.1，全部由 Gradle 按 `android\app\build.gradle` 里的声明使用，缺失时用 `sdkmanager` 安装。
+
+工程结构：
+
+- `android\` 是 Gradle 工程，只有一个 `:app` 模块。模块内的 `CMakeLists.txt` 把仓库根目录的 `CMakeLists.txt` 作为子目录加进来，NDK 工具链由 AGP 提供，源码与桌面端共用一份。
+- 入口是 `src\android_main.cpp`，走系统自带的 NativeActivity 与 NDK 的 `native_app_glue`，不写 Java 代码，也不依赖 AndroidX 库。窗口句柄到达时用 `vkCreateAndroidSurfaceKHR` 建表面，旋转或切后台导致的表面失效由现有交换链重建路径处理。
+- 模型、贴图、字体、着色器全部作为 assets 打进 APK：Gradle 在打包前把仓库 `assets\backpack` 复制到 `android\app\src\main\assets\assets`，把系统字体 `msyh.ttc` 复制到 `assets\fonts`；CMake 把编译出的 `.spv` 直接写进 `assets\shaders`。这些目录是构建产物，不入库。
+- 桌面代码读文件用的是 `readAssetBytes`，安卓端实现换成 `AAssetManager`，模型、贴图、SPIR-V 都以字节流形式从内存加载，调用方不区分平台。
+
+与桌面的差异：
+
+- 实例与设备申请 Vulkan 1.1，着色器以 `--target-env=vulkan1.1` 编译，覆盖只支持 1.1 的设备；`minSdk` 24 是 Vulkan 1.0 的最低 API 等级。
+- 设备时间不打 timestamp：移动 GPU 的时间戳查询经常不可用或精度很差，因此安卓上不创建查询池、不写时间戳，`设备时间` 恒为零，主机侧各项计时照常。
+- 剔除调度、G-Buffer 通道、光照通道、界面绘制段落在命令缓冲上打了 `VK_EXT_debug_utils` 标记，RenderDoc 截帧时按这些名字分段显示耗时。扩展不可用时标记为空操作。
+- GPU 锁频面板不显示：它依赖桌面的 `nvidia-smi`。
+- 相机固定在初始化位置，没有键盘输入；触摸事件交给 ImGui 的安卓后端，面板上的滑块和按钮可以直接操作。
+- 帧率上限 60 FPS，避免无界空转发热。
+
+安装与查看日志：
+
+```
+adb install -r android\app\build\outputs\apk\debug\app-debug.apk
+adb logcat -s VulkanIndirectDrawDemo
+```
 
 ## 运行
 
@@ -227,15 +266,18 @@ G-Buffer 由三张颜色附件与一张深度附件组成：
 
 | 文件 | 内容 |
 | --- | --- |
-| `src/main.cpp` | 命令行解析、主循环与界面状态 |
-| `src/vk_context.cpp` | 实例、调试信息回调、物理设备、逻辑设备与交换链 |
+| `src/main.cpp` | 桌面入口：命令行解析、主循环与界面状态 |
+| `src/android_main.cpp` | 安卓入口：NativeActivity 生命周期、ANativeWindow 表面与交换链、主循环 |
+| `src/asset_file.cpp` | 随包资源读取：桌面读构建目录文件，安卓读 APK 的 assets |
+| `src/vk_marker.cpp` | 命令缓冲调试标记的入口函数加载与 begin/end 调用 |
+| `src/vk_context.cpp` | 实例、调试信息回调、物理设备、逻辑设备、窗口表面与交换链 |
 | `src/vk_resources.cpp` | 缓冲与纹理的创建上传、多级渐远纹理生成、着色器模块加载 |
 | `src/obj_loader.cpp` | obj 解析、顶点去重、模型居中与包围球计算 |
 | `src/scene.cpp` | 实例网格生成与排序、跟随相机的光源平铺、相机控制、视锥平面提取、主机侧剔除 |
-| `src/renderer.cpp` | 渲染通道、描述符、三条管线、三条绘制路径与时间戳查询 |
+| `src/renderer.cpp` | 渲染通道、描述符、三条管线、三条绘制路径与时间戳查询（安卓上不查询） |
 | `src/timing.cpp` | 计时项定义、滑动窗口统计、启动至今的历史曲线、测量报告的在线统计 |
 | `src/user_interface.cpp` | imgui 与 implot 初始化、字体与字形校验、控制面板、耗时曲线绘制 |
-| `src/gpu_clock_lock.cpp` | 调用 `nvidia-smi` 探测显卡、读取支持的频率档位、锁频与解锁 |
+| `src/gpu_clock_lock.cpp` | 桌面实现调用 `nvidia-smi` 探测显卡与锁频，安卓实现为整组"不可用" |
 | `src/frame_capture.cpp` | 画面回读、像素统计与 PNG 写出 |
 | `shaders/cull.comp` | 视锥剔除与绘制命令填写 |
 | `shaders/gbuffer.vert` `shaders/gbuffer.frag` | 几何通道 |

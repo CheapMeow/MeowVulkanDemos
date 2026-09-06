@@ -2,3 +2,14 @@ build/
 assets/
 intermediate/
 *.spv
+
+# 安卓构建产物与机器相关的路径配置
+android/.gradle/
+android/build/
+android/local.properties
+android/app/build/
+android/app/.cxx/
+android/app/src/main/assets/
+
+# 传递本机依赖路径的脚本，不入库
+scripts/local_android_env.bat

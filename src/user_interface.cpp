@@ -1,9 +1,14 @@
 #include "user_interface.h"
 
+#include "asset_file.h"
 #include "vk_check.h"
 
 #include <imgui.h>
+#ifndef __ANDROID__
 #include <imgui_impl_glfw.h>
+#else
+#include <imgui_impl_android.h>
+#endif
 #include <imgui_impl_vulkan.h>
 #include <imgui_internal.h>
 #include <implot.h>
@@ -178,10 +183,21 @@ void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, Use
     ImFontConfig fontConfig;
     fontConfig.OversampleH = 2;
     fontConfig.OversampleV = 2;
-    ImFont* font =
-        io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/msyh.ttc", 18.0f, &fontConfig, gGlyphRanges.Data);
+    ImFont* font = nullptr;
+#ifdef __ANDROID__
+    // 安卓没有系统字体文件路径这一说，字体随包走 assets，和模型贴图一样从内存加载。
+    // FontDataOwnedByAtlas 默认是 true，图集会保存传入的指针并在销毁时释放它，
+    // 本地这份 vector 不能交给它，改成让图集复制一份
+    const std::vector<unsigned char> fontBytes = readAssetBytes("fonts/msyh.ttc");
+    fontConfig.FontDataOwnedByAtlas = false;
+    font = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(fontBytes.data()),
+                                          static_cast<int>(fontBytes.size()), 18.0f, &fontConfig,
+                                          gGlyphRanges.Data);
+#else
+    font = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/msyh.ttc", 18.0f, &fontConfig, gGlyphRanges.Data);
+#endif
     if (font == nullptr) {
-        FATAL("failed to load font C:/Windows/Fonts/msyh.ttc");
+        FATAL("failed to load the interface font");
     }
 
     ImGui::StyleColorsDark();
@@ -191,9 +207,15 @@ void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, Use
     style.WindowPadding = ImVec2(12.0f, 12.0f);
     style.ItemSpacing = ImVec2(8.0f, 7.0f);
 
+#ifndef __ANDROID__
     if (!ImGui_ImplGlfw_InitForVulkan(ctx.window, true)) {
         FATAL("failed to initialize the imgui GLFW backend");
     }
+#else
+    if (!ImGui_ImplAndroid_Init(ctx.window)) {
+        FATAL("failed to initialize the imgui android backend");
+    }
+#endif
 
     ImGui_ImplVulkan_InitInfo initInfo = {};
     initInfo.ApiVersion = VK_API_VERSION_1_2;
@@ -225,7 +247,11 @@ void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, Use
 void destroyUserInterface(const VulkanContext& ctx, UserInterface& ui)
 {
     ImGui_ImplVulkan_Shutdown();
+#ifndef __ANDROID__
     ImGui_ImplGlfw_Shutdown();
+#else
+    ImGui_ImplAndroid_Shutdown();
+#endif
     ImPlot::DestroyContext();
     ImGui::DestroyContext();
     vkDestroyDescriptorPool(ctx.device, ui.descriptorPool, nullptr);
@@ -235,7 +261,11 @@ void destroyUserInterface(const VulkanContext& ctx, UserInterface& ui)
 void beginUserInterfaceFrame()
 {
     ImGui_ImplVulkan_NewFrame();
+#ifndef __ANDROID__
     ImGui_ImplGlfw_NewFrame();
+#else
+    ImGui_ImplAndroid_NewFrame();
+#endif
     ImGui::NewFrame();
 }
 

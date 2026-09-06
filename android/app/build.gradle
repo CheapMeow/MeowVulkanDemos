@@ -1,0 +1,71 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.example.vulkanindirectdrawdemo"
+    compileSdk 35
+    ndkVersion "27.0.12077973"
+
+    defaultConfig {
+        applicationId "com.example.vulkanindirectdrawdemo"
+        // Vulkan 1.0 从 API 24 起才有，最低版本与 Vulkan 对齐
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17"
+                arguments "-DANDROID_STL=c++_static"
+            }
+        }
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            version "3.22.1"
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
+
+// 模型与贴图来自仓库根目录的 assets 目录。CMake 编译着色器时已经把 .spv 写进
+// src/main/assets/shaders，这里负责在打包前把其余资源复制进 src/main/assets。
+// 这些步骤在宿主上执行，路径是本机开发环境的路径，安卓端运行时只读 APK 里的 assets。
+def assetsDir = file("src/main/assets")
+tasks.register("copyDemoAssets", Copy) {
+    from layout.projectDirectory.dir("../../assets")
+    into assetsDir
+    outputs.upToDateWhen { false }
+}
+
+// 界面字体。桌面端直接读系统字体，安卓端字体必须随包，这里从 Windows 字体目录复制一份
+tasks.register("copyInterfaceFont", Copy) {
+    from "C:/Windows/Fonts/msyh.ttc"
+    into file("src/main/assets/fonts")
+    outputs.upToDateWhen { false }
+}
+
+// 编译着色器的 CMake 目标在 externalNativeBuild 阶段执行，等它写完 .spv 再合并资源
+tasks.configureEach { task ->
+    if (task.name.startsWith("merge") && task.name.endsWith("Assets")) {
+        task.dependsOn("copyDemoAssets", "copyInterfaceFont", "externalNativeBuildDebug")
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name == "externalNativeBuildDebug") {
+        task.dependsOn("copyDemoAssets", "copyInterfaceFont")
+    }
+}

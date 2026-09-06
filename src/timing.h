@@ -22,6 +22,10 @@ enum TimingId {
 const char* timingDisplayName(TimingId id);       // 界面与控制台使用的中文名称
 const char* timingReportColumnName(TimingId id);   // CSV 表头使用的英文列名
 
+// 单调时钟，单位秒，返回第一次调用以来经过的时间。两个平台共用同一套实现，
+// 免得各处的耗时计算依赖窗口库
+double nowSeconds();
+
 // 最近多少帧参与界面上的均值与标准差计算
 enum { TIMING_WINDOW_CAPACITY = 100 };
 

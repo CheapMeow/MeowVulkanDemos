@@ -1,4 +1,48 @@
 #include "gpu_clock_lock.h"
+
+#ifdef __ANDROID__
+
+// 锁频要调用 nvidia-smi，这个程序只存在于桌面系统。安卓上整套功能不存在，
+// 界面按 detected 为假显示"未探测到"，调用方不需要关心平台
+void detectGpuClockLockState(GpuClockLockState& state)
+{
+    state = GpuClockLockState();
+    state.detected = false;
+    state.lastAction = GpuClockLockAction::kDetectFailed;
+    state.lastActionDetail = "gpu clock locking needs nvidia-smi, which only exists on desktop";
+}
+
+void queryLiveGpuClocks(GpuClockLockState& /*state*/) {}
+
+bool requestGpuClockLockFromCommandLine(GpuClockLockState& /*state*/, uint32_t /*requestedCoreMHz*/,
+                                        uint32_t /*requestedMemoryMHz*/)
+{
+    return false;
+}
+
+void requestLockGpuClocks(GpuClockLockState& /*state*/) {}
+
+void requestUnlockGpuClocks(GpuClockLockState& /*state*/) {}
+
+void releaseGpuClockLockOnExit(GpuClockLockState& /*state*/) {}
+
+void startGpuClockMonitor(GpuClockMonitor& /*monitor*/, const GpuClockLockState& /*state*/,
+                          double /*startTime*/)
+{
+}
+
+void stopGpuClockMonitor(GpuClockMonitor& /*monitor*/) {}
+
+void copyGpuClockSamples(const GpuClockMonitor& /*monitor*/, std::vector<float>& outTimeSeconds,
+                         std::vector<float>& outCoreClockMHz, std::vector<float>& outMemoryClockMHz)
+{
+    outTimeSeconds.clear();
+    outCoreClockMHz.clear();
+    outMemoryClockMHz.clear();
+}
+
+#else
+
 #include "vk_check.h"
 
 #define NOMINMAX
@@ -449,3 +493,5 @@ void releaseGpuClockLockOnExit(GpuClockLockState& state)
         requestUnlockGpuClocks(state);
     }
 }
+
+#endif

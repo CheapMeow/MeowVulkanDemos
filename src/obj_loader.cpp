@@ -8,25 +8,6 @@
 #include <cstring>
 #include <unordered_map>
 
-static void readWholeFile(const std::string& path, std::vector<char>& outBytes)
-{
-    std::FILE* file = std::fopen(path.c_str(), "rb");
-    if (file == nullptr) {
-        FATAL("cannot open file %s", path.c_str());
-    }
-    std::fseek(file, 0, SEEK_END);
-    const long size = std::ftell(file);
-    std::fseek(file, 0, SEEK_SET);
-
-    outBytes.resize(static_cast<size_t>(size) + 1);
-    const size_t readBytes = std::fread(outBytes.data(), 1, static_cast<size_t>(size), file);
-    if (readBytes != static_cast<size_t>(size)) {
-        FATAL("incomplete read of file %s", path.c_str());
-    }
-    outBytes[static_cast<size_t>(size)] = '\0';
-    std::fclose(file);
-}
-
 // 解析 "位置/纹理坐标/法线" 形式的面顶点引用，索引从 1 开始，负数表示相对末尾
 static void parseFaceVertex(const char*& cursor, int& outPosition, int& outUv, int& outNormal)
 {
@@ -70,10 +51,12 @@ static int resolveIndex(int rawIndex, size_t count)
     FATAL("obj index is 0, which violates the format specification");
 }
 
-void loadObj(const std::string& path, MeshData& outMesh)
+void loadObjFromMemory(const std::vector<unsigned char>& fileBytes, MeshData& outMesh)
 {
-    std::vector<char> bytes;
-    readWholeFile(path, bytes);
+    // 后面的解析过程用 C 字符串游标扫描，末尾补一个结束符
+    std::vector<char> bytes(fileBytes.size() + 1);
+    std::memcpy(bytes.data(), fileBytes.data(), fileBytes.size());
+    bytes[fileBytes.size()] = '\0';
 
     std::vector<glm::vec3> positions;
     std::vector<glm::vec3> normals;
@@ -178,7 +161,7 @@ void loadObj(const std::string& path, MeshData& outMesh)
     }
 
     if (outMesh.vertices.empty() || outMesh.indices.empty()) {
-        FATAL("obj file %s produced no geometry", path.c_str());
+        FATAL("obj data produced no geometry");
     }
 
     glm::vec3 minCorner = outMesh.vertices[0].position;
@@ -205,7 +188,7 @@ void loadObj(const std::string& path, MeshData& outMesh)
     }
     outMesh.boundsRadius = std::sqrt(maxDistanceSquared);
 
-    std::printf("loaded %s: vertices %zu, indices %zu, triangles %zu, bounds radius %.4f\n", path.c_str(),
+    std::printf("loaded mesh: vertices %zu, indices %zu, triangles %zu, bounds radius %.4f\n",
                 outMesh.vertices.size(), outMesh.indices.size(), outMesh.indices.size() / 3,
                 outMesh.boundsRadius);
 }

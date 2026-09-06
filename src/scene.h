@@ -5,7 +5,20 @@
 #include <cstdint>
 #include <vector>
 
-struct GLFWwindow;
+// 相机操作在这一层只认按键状态，窗口库负责把它填满，安卓端没有键盘就全填 false
+struct CameraInput {
+    bool turnLeft;
+    bool turnRight;
+    bool turnUp;
+    bool turnDown;
+    bool moveForward;
+    bool moveBack;
+    bool moveLeft;
+    bool moveRight;
+    bool moveUp;
+    bool moveDown;
+    bool fast;
+};
 
 // 与着色器中的 InstanceData 逐字节对应
 struct InstanceData {
@@ -47,7 +60,7 @@ void updateLights(const glm::vec3& cameraPosition, uint32_t lightCount, float sp
                   std::vector<LightData>& lights);
 
 void initCamera(Camera& camera, const std::vector<InstanceData>& instances);
-void updateCamera(Camera& camera, GLFWwindow* window, float deltaSeconds);
+void updateCamera(Camera& camera, const CameraInput& input, float deltaSeconds);
 void fillCameraUniform(const Camera& camera, float aspectRatio, uint32_t instanceCount, float boundsRadius,
                        uint32_t lightCount, CameraUniform& outUniform);
 

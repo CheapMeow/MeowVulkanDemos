@@ -20,5 +20,5 @@ struct MeshData {
     float boundsRadius;
 };
 
-// 解析仅含三角面、单一材质的 obj 文件
-void loadObj(const std::string& path, MeshData& outMesh);
+// 解析仅含三角面、单一材质的 obj，输入是随包资源的字节，由调用方用 readAssetBytes 读入
+void loadObjFromMemory(const std::vector<unsigned char>& fileBytes, MeshData& outMesh);

@@ -118,14 +118,16 @@ static void transitionImageLayout(VkCommandBuffer commandBuffer, VkImage image, 
     vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
-void createTextureFromFile(const VulkanContext& ctx, const std::string& path, bool srgb, GpuTexture& outTexture)
+void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigned char>& fileBytes, bool srgb,
+                             GpuTexture& outTexture)
 {
     int width = 0;
     int height = 0;
     int channels = 0;
-    stbi_uc* pixels = stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+    stbi_uc* pixels = stbi_load_from_memory(fileBytes.data(), static_cast<int>(fileBytes.size()), &width, &height,
+                                           &channels, STBI_rgb_alpha);
     if (pixels == nullptr) {
-        FATAL("failed to load texture %s: %s", path.c_str(), stbi_failure_reason());
+        FATAL("failed to load texture from memory: %s", stbi_failure_reason());
     }
 
     outTexture = GpuTexture();
@@ -247,8 +249,7 @@ void createTextureFromFile(const VulkanContext& ctx, const std::string& path, bo
     viewInfo.subresourceRange.layerCount = 1;
     VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, &outTexture.view));
 
-    std::printf("loaded texture %s: %ux%u, mip levels %u\n", path.c_str(), outTexture.width, outTexture.height,
-                mipLevels);
+    std::printf("loaded texture: %ux%u, mip levels %u\n", outTexture.width, outTexture.height, mipLevels);
 }
 
 void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t height, VkFormat format,
@@ -325,27 +326,17 @@ VkSampler createLinearSampler(const VulkanContext& ctx, uint32_t mipLevels)
     return sampler;
 }
 
-VkShaderModule loadShaderModule(const VulkanContext& ctx, const std::string& spirvPath)
+VkShaderModule loadShaderModuleFromMemory(const VulkanContext& ctx,
+                                          const std::vector<unsigned char>& spirvBytes)
 {
-    std::FILE* file = std::fopen(spirvPath.c_str(), "rb");
-    if (file == nullptr) {
-        FATAL("cannot open shader file %s", spirvPath.c_str());
-    }
-    std::fseek(file, 0, SEEK_END);
-    const long size = std::ftell(file);
-    std::fseek(file, 0, SEEK_SET);
-
-    std::vector<char> code(static_cast<size_t>(size));
-    const size_t readBytes = std::fread(code.data(), 1, static_cast<size_t>(size), file);
-    std::fclose(file);
-    if (readBytes != static_cast<size_t>(size)) {
-        FATAL("incomplete read of shader file %s", spirvPath.c_str());
+    if (spirvBytes.empty() || spirvBytes.size() % 4 != 0) {
+        FATAL("shader bytecode size %zu is not a whole number of 32-bit words", spirvBytes.size());
     }
 
     VkShaderModuleCreateInfo moduleInfo = {};
     moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    moduleInfo.codeSize = code.size();
-    moduleInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+    moduleInfo.codeSize = spirvBytes.size();
+    moduleInfo.pCode = reinterpret_cast<const uint32_t*>(spirvBytes.data());
 
     VkShaderModule shaderModule = VK_NULL_HANDLE;
     VK_CHECK(vkCreateShaderModule(ctx.device, &moduleInfo, nullptr, &shaderModule));

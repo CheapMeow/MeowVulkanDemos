@@ -1,6 +1,14 @@
 #include "timing.h"
 
+#include <chrono>
 #include <cmath>
+
+double nowSeconds()
+{
+    static const std::chrono::steady_clock::time_point firstCall = std::chrono::steady_clock::now();
+    const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - firstCall;
+    return elapsed.count();
+}
 
 const char* timingDisplayName(TimingId id)
 {

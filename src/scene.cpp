@@ -1,6 +1,5 @@
 #include "scene.h"
 
-#include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
@@ -105,19 +104,19 @@ static glm::vec3 cameraForward(const Camera& camera)
                      -std::cos(camera.pitch) * std::cos(camera.yaw));
 }
 
-void updateCamera(Camera& camera, GLFWwindow* window, float deltaSeconds)
+void updateCamera(Camera& camera, const CameraInput& input, float deltaSeconds)
 {
     const float rotateSpeed = 1.4f;
-    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
+    if (input.turnLeft) {
         camera.yaw -= rotateSpeed * deltaSeconds;
     }
-    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
+    if (input.turnRight) {
         camera.yaw += rotateSpeed * deltaSeconds;
     }
-    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
+    if (input.turnUp) {
         camera.pitch += rotateSpeed * deltaSeconds;
     }
-    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
+    if (input.turnDown) {
         camera.pitch -= rotateSpeed * deltaSeconds;
     }
     camera.pitch = glm::clamp(camera.pitch, -1.5f, 1.5f);
@@ -126,26 +125,26 @@ void updateCamera(Camera& camera, GLFWwindow* window, float deltaSeconds)
     const glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
 
     float speed = camera.moveSpeed;
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
+    if (input.fast) {
         speed *= 4.0f;
     }
 
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+    if (input.moveForward) {
         camera.position += forward * speed * deltaSeconds;
     }
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+    if (input.moveBack) {
         camera.position -= forward * speed * deltaSeconds;
     }
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+    if (input.moveLeft) {
         camera.position -= right * speed * deltaSeconds;
     }
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+    if (input.moveRight) {
         camera.position += right * speed * deltaSeconds;
     }
-    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
+    if (input.moveUp) {
         camera.position.y += speed * deltaSeconds;
     }
-    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) {
+    if (input.moveDown) {
         camera.position.y -= speed * deltaSeconds;
     }
 }
