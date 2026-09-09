@@ -20,7 +20,7 @@ Windows 与安卓平台上的 Vulkan 延迟渲染示例，用同一份场景、�
 | `external/imgui` | 参数控制面板与耗时显示 |
 | `external/implot` | 耗时曲线绘制 |
 
-桌面的 Vulkan 头文件、`vulkan-1.lib` 与 `glslc.exe` 来自本机安装的 Vulkan SDK，路径由 CMake 变量 `VULKAN_SDK_DIR` 指定，默认 `D:/path/to/VulkanSDK`。安卓构建不需要 Vulkan SDK：头文件与 `libvulkan.so` 由 NDK 提供，`glslc.exe` 仍然在宿主机上编译着色器，只是 SPIR-V 的目标版本按平台区分（桌面 1.2，安卓 1.1）。
+桌面的 Vulkan 头文件、`vulkan-1.lib` 与 `glslc.exe` 来自本机安装的 Vulkan SDK，路径由环境变量 `VULKAN_SDK_DIR` 提供，仓库内不写任何本机路径（见下文 `local_env.bat` 机制）。安卓构建不需要 Vulkan SDK 的头文件与库：它们由 NDK 提供，只有 `glslc.exe` 需要在宿主机上编译着色器，同样经 `VULKAN_SDK_DIR` 或 PATH 找到；SPIR-V 的目标版本按平台区分（桌面 1.2，安卓 1.1）。
 
 ## 准备与构建
 
@@ -40,18 +40,14 @@ scripts\build.bat
 scripts\build_android.bat
 ```
 
-产物是 `android\app\build\outputs\apk\debug\app-debug.apk`。构建脚本里不含任何本机路径，依赖路径全部从环境变量读取：`JAVA_HOME` 指向 JDK 17，`ANDROID_HOME` 指向 Android SDK。当机器的全局环境变量不满足要求时，在 `scripts\` 下放一个不入库的 `local_env.bat` 来覆盖，例如：
+产物是 `android\app\build\outputs\apk\debug\app-debug.apk`。构建脚本里不含任何本机路径，依赖路径全部从环境变量读取：`JAVA_HOME` 指向 JDK 17，`ANDROID_HOME` 指向 Android SDK，桌面构建还用到 `VS_DIR`（Visual Studio 安装目录）与 `VULKAN_SDK_DIR`（Vulkan SDK 目录）。全局环境不满足时，在 `scripts\` 下放一个不入库的 `local_env.bat`，构建脚本检测到存在就先执行它，例如：
 
 ```
 set "JAVA_HOME=D:\path\to\jdk17"
 set "ANDROID_HOME=D:\path\to\android-sdk"
 set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
-```
-
-同一个文件也被桌面构建使用，可以把 Visual Studio 路径一并写进去：
-
-```
 set "VS_DIR=D:\path\to\Visual Studio\2019\Community"
+set "VULKAN_SDK_DIR=D:\path\to\VulkanSDK"
 ```
 
 `scripts\build.bat` 与 `scripts\build_android.bat` 检测到 `local_env.bat` 存在就先执行它，再校验相关变量是否指向有效安装。需要的 SDK 组件是 platform 35、build-tools 34、NDK 27.0.12077973 与 CMake 3.22.1，全部由 Gradle 按 `android\app\build.gradle` 里的声明使用，缺失时用 `sdkmanager` 安装。

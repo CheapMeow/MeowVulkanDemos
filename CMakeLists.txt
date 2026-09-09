@@ -10,10 +10,22 @@ if(MSVC)
     add_compile_options(/W3)
 endif()
 
-set(VULKAN_SDK_DIR "D:/path/to/VulkanSDK" CACHE PATH "Vulkan SDK 安装目录")
-find_program(GLSLC_EXECUTABLE NAMES glslc glslc.exe
-    HINTS "${VULKAN_SDK_DIR}/Bin"
-    DOC "glslc 着色器编译器路径")
+# Vulkan SDK 的路径不写进仓库。桌面构建需要它的头文件、库与 glslc，全部由环境变量
+# VULKAN_SDK_DIR 提供：scripts\local_env.bat（不入库）里 set 好，scripts\build.bat 执行它
+# 之后 CMake 在这里只从环境读取。安卓构建不需要头文件与库（由 NDK 提供），但编译着色器
+# 仍然需要 glslc，它经 VULKAN_SDK_DIR 或 PATH 找到
+set(VULKAN_SDK_DIR "$ENV{VULKAN_SDK_DIR}")
+if(VULKAN_SDK_DIR)
+    find_program(GLSLC_EXECUTABLE NAMES glslc glslc.exe
+        HINTS "${VULKAN_SDK_DIR}/Bin"
+        DOC "glslc 着色器编译器路径")
+else()
+    find_program(GLSLC_EXECUTABLE NAMES glslc glslc.exe
+        DOC "glslc 着色器编译器路径")
+endif()
+if(NOT GLSLC_EXECUTABLE)
+    message(FATAL_ERROR "glslc not found: set VULKAN_SDK_DIR in scripts\\local_env.bat or add glslc to PATH and rerun")
+endif()
 
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui")
 set(IMPLOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/implot")
@@ -107,6 +119,13 @@ if(ANDROID)
     )
 else()
     # 桌面端：GLFW 提供窗口与输入，着色器输出到构建目录，代码以绝对路径引用构建产物
+    # 桌面构建必须有 Vulkan SDK：头文件、vulkan-1.lib 与 glslc 都在它下面
+    if(NOT VULKAN_SDK_DIR)
+        message(FATAL_ERROR "VULKAN_SDK_DIR is not set: point it at the Vulkan SDK in scripts\\local_env.bat and rerun")
+    endif()
+    if(NOT EXISTS "${VULKAN_SDK_DIR}/Include/vulkan/vulkan.h")
+        message(FATAL_ERROR "VULKAN_SDK_DIR does not contain a Vulkan SDK: ${VULKAN_SDK_DIR}")
+    endif()
     set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
