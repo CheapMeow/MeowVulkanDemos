@@ -43,10 +43,10 @@ if exist "%REPORT%" del "%REPORT%"
 rem Write the CSV header once
 echo draw_path,instances,visible_instances,draw_commands,frame_ms_avg,frame_ms_stddev,cpu_cull_ms_avg,cpu_cull_ms_stddev,cpu_record_begin_ms_avg,cpu_record_begin_ms_stddev,cpu_record_cull_dispatch_ms_avg,cpu_record_cull_dispatch_ms_stddev,cpu_record_gbuffer_pass_ms_avg,cpu_record_gbuffer_pass_ms_stddev,cpu_record_lighting_pass_ms_avg,cpu_record_lighting_pass_ms_stddev,cpu_record_ui_ms_avg,cpu_record_ui_ms_stddev,cpu_record_capture_ms_avg,cpu_record_capture_ms_stddev,cpu_record_submit_ms_avg,cpu_record_submit_ms_stddev,gpu_ms_avg,gpu_ms_stddev> "%REPORT%"
 
-rem PC grid divided by ten: 200000/160 -> 20000/160 etc.
-call :measure 20000 160
-call :measure 20000 420
-call :measure 100000 160
+rem PC grid divided by 100
+call :measure 200 160
+call :measure 200 420
+call :measure 1000 160
 
 "%ADB_EXE%" %ADB_DEVICE% shell am force-stop %PACKAGE% >nul 2>&1
 
