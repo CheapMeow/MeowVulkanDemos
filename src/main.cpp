@@ -4,7 +4,6 @@
 #include "frame_capture.h"
 #include "gpu_clock_lock.h"
 #include "obj_loader.h"
-#include "rdoc_trigger.h"
 #include "renderer.h"
 #include "scene.h"
 #include "timing.h"
@@ -216,7 +215,7 @@ int main(int argc, char** argv)
     }
     bool captureDone = false;
 
-    // TCP 控制服务：外部测量脚本连接后逐条发命令，配置、分段测量、截帧都在这里执行。
+    // TCP 控制服务：外部测量脚本连接后逐条发命令，配置与分段测量都在这里执行。
     // 命令在主线程的 pump 里处理，与渲染线程天然串行，不需要额外加锁
     ControlServer controlServer;
     bool usedSegments = false;      // 用过 begin/end 分段测量后，退出不再写整段报告
@@ -298,10 +297,6 @@ int main(int argc, char** argv)
             segmentActive = false;
             resetTimingReport(timingStore);
             return "row " + line;
-        }
-        if (verb == "capture") {
-            renderdocTriggerCapture();
-            return "ok";
         }
         if (verb == "quit") {
             quitRequested = true;

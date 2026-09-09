@@ -4,7 +4,6 @@
 #include "control_server.h"
 #include "gpu_clock_lock.h"
 #include "obj_loader.h"
-#include "rdoc_trigger.h"
 #include "renderer.h"
 #include "scene.h"
 #include "timing.h"
@@ -297,7 +296,7 @@ static void drawOneFrame(AppState& state)
 }
 
 // TCP 控制命令与桌面端一致：path/instances/lights/far 改配置，
-// begin/end 圈定一段测量并返回一行报告，capture 触发 RenderDoc 截帧
+// begin/end 圈定一段测量并返回一行报告，quit 结束进程
 static void installControlHandler(AppState& state)
 {
     state.controlServer.onCommand = [&state](const std::string& command) -> std::string {
@@ -372,10 +371,6 @@ static void installControlHandler(AppState& state)
             state.segmentActive = false;
             resetTimingReport(state.timingStore);
             return "row " + row;
-        }
-        if (verb == "capture") {
-            renderdocTriggerCapture();
-            return "ok";
         }
         if (verb == "quit") {
             state.quitRequested = true;

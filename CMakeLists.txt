@@ -31,11 +31,9 @@ set(DEMO_COMMON_SOURCES
     src/asset_file.cpp
     src/control_server.cpp
     src/obj_loader.cpp
-    src/rdoc_trigger.cpp
     src/scene.cpp
     src/timing.cpp
     src/vk_context.cpp
-    src/vk_marker.cpp
     src/vk_resources.cpp
     src/renderer.cpp
     src/user_interface.cpp

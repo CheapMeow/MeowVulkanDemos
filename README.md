@@ -67,7 +67,6 @@ set "VS_DIR=D:\path\to\Visual Studio\2019\Community"
 
 - 实例与设备申请 Vulkan 1.1，着色器以 `--target-env=vulkan1.1` 编译，覆盖只支持 1.1 的设备；`minSdk` 24 是 Vulkan 1.0 的最低 API 等级。
 - 设备时间只在设备支持时间戳时测量：驱动的 `timestampComputeAndGraphics` 能力与图形队列族的 `timestampValidBits` 都满足才创建查询池并记录时间戳，不支持的设备上 `设备时间` 恒为零，主机侧各项计时照常。
-- 剔除调度、G-Buffer 通道、光照通道、界面绘制段落在命令缓冲上打了 `VK_EXT_debug_utils` 标记，RenderDoc 截帧时按这些名字分段显示耗时。扩展不可用时标记为空操作。
 - GPU 锁频面板不显示：它依赖桌面的 `nvidia-smi`。
 - 相机固定在初始化位置，没有键盘输入；触摸事件交给 ImGui 的安卓后端，面板上的滑块和按钮可以直接操作。
 - 帧率上限 60 FPS，避免无界空转发热。
@@ -81,22 +80,13 @@ adb -s <serial> install -r android\app\build\outputs\apk\debug\app-debug.apk
 adb -s <serial> logcat -s VulkanIndirectDrawDemo
 ```
 
-应用内置回环 TCP 控制服务（桌面与安卓一致，端口 21000），连接后按行发命令：`path`/`instances`/`lights`/`far` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`capture` 触发 RenderDoc 截一帧，`quit` 退出。安卓端经 `adb forward tcp:21000 tcp:21000` 把设备上的控制端口映射到本机。
+应用内置回环 TCP 控制服务（桌面与安卓一致，端口 21000），连接后按行发命令：`path`/`instances`/`lights`/`far` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。安卓端经 `adb forward tcp:21000 tcp:21000` 把设备上的控制端口映射到本机。
 
 耗时的自动化测量由 `scripts\measure_android.bat` 完成，它用上面的 TCP 接口在真机上跑与 `measure_pc.bat` 相同的配置网格、但实例数量取十分之一，把每段返回的行写进 `intermediate\measure_report_android.csv`。第一个参数是可选的设备序列号，多台设备连接时必需：
 
 ```
 scripts\measure_android.bat [serial]
 ```
-
-用 RenderDoc 在真机上截帧不需要在本机启动 qrenderdoc。`scripts\renderdoc_capture.bat start` 通过 adb 完成整套准备——启动设备上的 RenderDoc 远程服务 `org.renderdoc.renderdoccmd.arm64`，把 `VK_LAYER_RENDERDOC_Capture` 挂到本应用的包名上，再以带层的方式启动应用；`scripts\renderdoc_capture.bat stop` 撤销这些全局设置。序列号是 start/stop 之后的可选参数，多台设备连接时必需：
-
-```
-scripts\renderdoc_capture.bat start [serial]
-scripts\renderdoc_capture.bat stop  [serial]
-```
-
-截帧文件由设备端 RenderDoc 写入 `/sdcard/Android/media/com.example.vulkanindirectdrawdemo/files/RenderDoc/`。手机需要先安装 RenderDoc 的 `org.renderdoc.renderdoccmd.arm64` 与本应用。脚本复刻标准 RenderDoc 安卓挂载流程，纯批处理实现，不依赖 python。
 
 ## 运行
 
@@ -297,7 +287,6 @@ G-Buffer 由三张颜色附件与一张深度附件组成：
 | `src/main.cpp` | 桌面入口：命令行解析、主循环与界面状态 |
 | `src/android_main.cpp` | 安卓入口：NativeActivity 生命周期、ANativeWindow 表面与交换链、主循环 |
 | `src/asset_file.cpp` | 随包资源读取：桌面读构建目录文件，安卓读 APK 的 assets |
-| `src/vk_marker.cpp` | 命令缓冲调试标记的入口函数加载与 begin/end 调用 |
 | `src/vk_context.cpp` | 实例、调试信息回调、物理设备、逻辑设备、窗口表面与交换链 |
 | `src/vk_resources.cpp` | 缓冲与纹理的创建上传、多级渐远纹理生成、着色器模块加载 |
 | `src/obj_loader.cpp` | obj 解析、顶点去重、模型居中与包围球计算 |

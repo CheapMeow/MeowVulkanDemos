@@ -724,8 +724,6 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
             VK_CHECK(vkCreateQueryPool(ctx.device, &queryPoolInfo, nullptr, &frame.timestampPool));
         }
     }
-
-    initVulkanMarkers(ctx.instance, renderer.markers);
 }
 
 void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
@@ -870,7 +868,6 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
 
     const double cullDispatchStart = nowSeconds();
     if (input.drawPath == DRAW_PATH_INDIRECT) {
-        beginCommandLabel(renderer.markers, frame.commandBuffer, "cull dispatch");
         // 实例数量清零后由计算着色器用原子累加填充
         vkCmdFillBuffer(frame.commandBuffer, frame.indirectBuffer.buffer,
                         offsetof(VkDrawIndexedIndirectCommand, instanceCount), sizeof(uint32_t), 0);
@@ -916,13 +913,11 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         countCopy.size = sizeof(uint32_t);
         vkCmdCopyBuffer(frame.commandBuffer, frame.indirectBuffer.buffer,
                         frame.visibleCountReadbackBuffer.buffer, 1, &countCopy);
-        endCommandLabel(renderer.markers, frame.commandBuffer);
     }
     outStatistics.cpuRecordCullDispatchMilliseconds =
         input.drawPath == DRAW_PATH_INDIRECT ? (nowSeconds() - cullDispatchStart) * 1000.0 : 0.0;
 
     const double gbufferPassStart = nowSeconds();
-    beginCommandLabel(renderer.markers, frame.commandBuffer, "gbuffer pass");
 
     VkViewport viewport = {};
     viewport.width = static_cast<float>(ctx.swapchainExtent.width);
@@ -977,11 +972,9 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     }
 
     vkCmdEndRenderPass(frame.commandBuffer);
-    endCommandLabel(renderer.markers, frame.commandBuffer);
     outStatistics.cpuRecordGBufferPassMilliseconds = (nowSeconds() - gbufferPassStart) * 1000.0;
 
     const double lightingPassStart = nowSeconds();
-    beginCommandLabel(renderer.markers, frame.commandBuffer, "lighting pass");
 
     VkRenderPassBeginInfo lightingBegin = {};
     lightingBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1002,13 +995,10 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
 
     const double uiStart = nowSeconds();
     if (input.drawUserInterface) {
-        beginCommandLabel(renderer.markers, frame.commandBuffer, "ui");
         recordUserInterfaceCommands(frame.commandBuffer);
-        endCommandLabel(renderer.markers, frame.commandBuffer);
     }
 
     vkCmdEndRenderPass(frame.commandBuffer);
-    endCommandLabel(renderer.markers, frame.commandBuffer);
     outStatistics.cpuRecordUiMilliseconds = (nowSeconds() - uiStart) * 1000.0;
 
     const double captureStart = nowSeconds();

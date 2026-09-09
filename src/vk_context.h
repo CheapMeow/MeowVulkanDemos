@@ -22,7 +22,7 @@ struct VulkanContext {
 
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger;
-    bool debugUtilsEnabled;  // VK_EXT_debug_utils 是否可用，决定命令标记能不能打
+    bool debugUtilsEnabled;  // VK_EXT_debug_utils 是否可用，请求验证层时必须有它
     VkSurfaceKHR surface;
 
     VkPhysicalDevice physicalDevice;

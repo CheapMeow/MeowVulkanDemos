@@ -54,7 +54,7 @@ static void createInstance(VulkanContext& ctx, bool enableValidation)
     extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
 #endif
 
-    // 命令标记要用这个扩展，它在带调试层与多数移动端驱动上都有
+    // 验证层的错误与警告回调要挂在 VK_EXT_debug_utils 上，扩展缺失时不能启用验证层
     if (isInstanceExtensionAvailable(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         ctx.debugUtilsEnabled = true;
