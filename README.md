@@ -1,5 +1,13 @@
 # Vulkan Indirect Draw 对比示例
 
+## TLDR
+
+本仓库都是用 AI 写的。AI 分析结果写了很多，但是简单来说：单独的 IndirectDraw 其实只是把 Culling 从 CPU 搬到 GPU，省一点 CPU Culling 的开销。对于 PC 来说，mesh 数量多的时候，比如几万/十几万的时候，收益比较明显，可以有1左右毫秒的节省。但是即使是对于 PC，这个数量级还是太极端。然后在安卓上的话，几百个 mesh 绘制就已经很费了，Culling 迁移的收益根本不显著，看不出来。
+
+再简略成一句话，搭建 GPU Driven 管线，相比 DrawInstance，单纯使用 IndirectDraw 把 Culling 从 CPU 搬到 GPU，无论是 PC 还是 Android，在正常的模型复杂度下，没有显著收益。因此 IndirectDraw 本身不是收益来源。
+
+## 简介
+
 Windows 与安卓平台上的 Vulkan 延迟渲染示例，用同一份场景、同一份着色器，对比三条几何提交路径：
 
 - 逐实例路径：主机遍历全部实例做视锥剔除，为每个可见实例记录一条 `vkCmdDrawIndexed`
