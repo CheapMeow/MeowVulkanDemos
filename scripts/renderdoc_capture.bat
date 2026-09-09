@@ -11,6 +11,8 @@ rem
 rem Usage:
 rem   renderdoc_capture.bat start [serial]
 rem   renderdoc_capture.bat stop  [serial]
+rem The serial selects which connected device to use. It is required when more
+rem than one device is attached; with a single device it can be omitted.
 rem
 rem Capture files land on the device under
 rem   /sdcard/Android/media/<package>/files/RenderDoc/
@@ -31,19 +33,17 @@ if defined ANDROID_HOME if exist "%ANDROID_HOME%\platform-tools\adb.exe" (
 set MODE=%1
 if "%MODE%"=="" set MODE=start
 
-set ADB_DEVICE=
-if not "%2"=="" set "ADB_DEVICE=-s %2"
-
 if not "%MODE%"=="start" if not "%MODE%"=="stop" (
     echo Unknown mode %MODE%. Use start or stop.
     exit /b 1
 )
 
-"%ADB_EXE%" %ADB_DEVICE% get-state >nul 2>&1
-if errorlevel 1 (
-    echo No device is reachable via adb.
-    exit /b 1
-)
+rem The serial is the argument after the mode word. Pick the target device
+rem before touching anything so that a missing serial while several devices are
+rem attached fails immediately.
+set ADB_SERIAL_ARG=%2
+call :resolve_device
+if errorlevel 1 exit /b 1
 
 if "%MODE%"=="start" (
     echo Starting RenderDoc remote server on the device...
@@ -87,3 +87,46 @@ rem adb drops empty string arguments, so clear the keys by deleting them
 "%ADB_EXE%" %ADB_DEVICE% shell settings delete global gpu_debug_layers_gles
 echo RenderDoc layer detached.
 exit /b 0
+
+:resolve_device
+rem Sets ADB_DEVICE to "-s <serial>" for every adb call in this script.
+rem ADB_SERIAL_ARG holds the serial from the command line and may be empty.
+rem Returns errorlevel 0 on success and 1 when no device is reachable or when
+rem several devices are attached but no serial was given.
+if "%ADB_SERIAL_ARG%"=="" goto :no_serial_given
+
+set "SERIAL_FOUND="
+for /f "tokens=1,2" %%A in ('"%ADB_EXE%" devices') do (
+    if "%%B"=="device" (
+        if "%%A"=="%ADB_SERIAL_ARG%" set "SERIAL_FOUND=1"
+    )
+)
+if not "%SERIAL_FOUND%"=="1" (
+    echo Device %ADB_SERIAL_ARG% is not reachable via adb.
+    "%ADB_EXE%" devices
+    exit /b 1
+)
+set "ADB_DEVICE=-s %ADB_SERIAL_ARG%"
+exit /b 0
+
+:no_serial_given
+set DEVICE_COUNT=0
+set "ONLY_SERIAL="
+for /f "tokens=1,2" %%A in ('"%ADB_EXE%" devices') do (
+    if "%%B"=="device" (
+        set /a DEVICE_COUNT+=1
+        set "ONLY_SERIAL=%%A"
+    )
+)
+if "%DEVICE_COUNT%"=="0" (
+    echo No device is reachable via adb.
+    exit /b 1
+)
+if "%DEVICE_COUNT%"=="1" (
+    set "ADB_DEVICE=-s %ONLY_SERIAL%"
+    exit /b 0
+)
+echo Multiple devices are attached to adb. Pass the serial of the target device
+echo as the second argument, e.g. "renderdoc_capture.bat stop 0123456789ABCDEF".
+"%ADB_EXE%" devices
+exit /b 1

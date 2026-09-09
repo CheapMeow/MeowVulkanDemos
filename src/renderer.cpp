@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <vector>
 
 const char* drawPathName(DrawPath drawPath)
 {
@@ -586,6 +587,15 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
     renderer.instanceCapacity = static_cast<uint32_t>(instances.size());
     renderer.lightCapacity = lightCapacity;
 
+    // 时间戳查询支持由设备能力决定，桌面与安卓都按同一套规则探测
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(ctx.physicalDevice, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(ctx.physicalDevice, &queueFamilyCount, queueFamilies.data());
+    renderer.timestampsSupported =
+        ctx.physicalDeviceProperties.limits.timestampComputeAndGraphics == VK_TRUE &&
+        queueFamilies[ctx.queueFamilyIndex].timestampValidBits != 0;
+
     const VkDeviceSize vertexBytes = sizeof(MeshVertex) * mesh.vertices.size();
     createBuffer(ctx, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, renderer.vertexBuffer);
@@ -705,14 +715,14 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
                              renderer.material.sampler);
         writeBufferDescriptor(ctx, frame.lightingSet, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.lightBuffer);
 
-#ifndef __ANDROID__
-        VkQueryPoolCreateInfo queryPoolInfo = {};
-        queryPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-        queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        queryPoolInfo.queryCount = 2;
-        VK_CHECK(vkCreateQueryPool(ctx.device, &queryPoolInfo, nullptr, &frame.timestampPool));
         frame.timestampsValid = false;
-#endif
+        if (renderer.timestampsSupported) {
+            VkQueryPoolCreateInfo queryPoolInfo = {};
+            queryPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            queryPoolInfo.queryCount = 2;
+            VK_CHECK(vkCreateQueryPool(ctx.device, &queryPoolInfo, nullptr, &frame.timestampPool));
+        }
     }
 
     initVulkanMarkers(ctx.instance, renderer.markers);
@@ -722,9 +732,9 @@ void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
 {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         FrameResources& frame = renderer.frames[i];
-#ifndef __ANDROID__
-        vkDestroyQueryPool(ctx.device, frame.timestampPool, nullptr);
-#endif
+        if (renderer.timestampsSupported) {
+            vkDestroyQueryPool(ctx.device, frame.timestampPool, nullptr);
+        }
         destroyBuffer(ctx, frame.visibleCountReadbackBuffer);
         destroyBuffer(ctx, frame.indirectBuffer);
         destroyBuffer(ctx, frame.gpuVisibleBuffer);
@@ -800,16 +810,13 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
 
     // 上一次使用本组资源的那一帧已经完成，可以读取它的计时与可见数量
     outStatistics.gpuMilliseconds = 0.0;
-#ifndef __ANDROID__
-    // 安卓移动 GPU 的时间戳查询经常不可用或者精度很差，设备时间不测，界面上一律显示为零
-    if (frame.timestampsValid) {
+    if (renderer.timestampsSupported && frame.timestampsValid) {
         uint64_t timestamps[2] = { 0, 0 };
         VK_CHECK(vkGetQueryPoolResults(ctx.device, frame.timestampPool, 0, 2, sizeof(timestamps), timestamps,
                                        sizeof(uint64_t), VK_QUERY_RESULT_64_BIT));
         outStatistics.gpuMilliseconds = static_cast<double>(timestamps[1] - timestamps[0]) *
                                         static_cast<double>(renderer.timestampPeriodNanoseconds) / 1000000.0;
     }
-#endif
 
     uint32_t imageIndex = 0;
     const VkResult acquireResult = vkAcquireNextImageKHR(ctx.device, ctx.swapchain, UINT64_MAX,
@@ -854,10 +861,10 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo));
 
-#ifndef __ANDROID__
-    vkCmdResetQueryPool(frame.commandBuffer, frame.timestampPool, 0, 2);
-    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.timestampPool, 0);
-#endif
+    if (renderer.timestampsSupported) {
+        vkCmdResetQueryPool(frame.commandBuffer, frame.timestampPool, 0, 2);
+        vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.timestampPool, 0);
+    }
 
     outStatistics.cpuRecordBeginMilliseconds = (nowSeconds() - recordBeginStart) * 1000.0;
 
@@ -1042,9 +1049,9 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
         input.captureBuffer != nullptr ? (nowSeconds() - captureStart) * 1000.0 : 0.0;
 
     const double submitStart = nowSeconds();
-#ifndef __ANDROID__
-    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.timestampPool, 1);
-#endif
+    if (renderer.timestampsSupported) {
+        vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.timestampPool, 1);
+    }
 
     VK_CHECK(vkEndCommandBuffer(frame.commandBuffer));
 
@@ -1061,9 +1068,9 @@ bool drawFrame(const VulkanContext& ctx, Renderer& renderer, uint64_t frameCount
     VK_CHECK(vkQueueSubmit(ctx.queue, 1, &submitInfo, frame.inFlight));
     outStatistics.cpuRecordSubmitMilliseconds = (nowSeconds() - submitStart) * 1000.0;
 
-#ifndef __ANDROID__
-    frame.timestampsValid = true;
-#endif
+    if (renderer.timestampsSupported) {
+        frame.timestampsValid = true;
+    }
     outStatistics.visibleInstanceCount = cpuVisibleCount;
 
     VkPresentInfoKHR presentInfo = {};

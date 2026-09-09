@@ -66,22 +66,37 @@ set "VS_DIR=D:\path\to\Visual Studio\2019\Community"
 与桌面的差异：
 
 - 实例与设备申请 Vulkan 1.1，着色器以 `--target-env=vulkan1.1` 编译，覆盖只支持 1.1 的设备；`minSdk` 24 是 Vulkan 1.0 的最低 API 等级。
-- 设备时间不打 timestamp：移动 GPU 的时间戳查询经常不可用或精度很差，因此安卓上不创建查询池、不写时间戳，`设备时间` 恒为零，主机侧各项计时照常。
+- 设备时间只在设备支持时间戳时测量：驱动的 `timestampComputeAndGraphics` 能力与图形队列族的 `timestampValidBits` 都满足才创建查询池并记录时间戳，不支持的设备上 `设备时间` 恒为零，主机侧各项计时照常。
 - 剔除调度、G-Buffer 通道、光照通道、界面绘制段落在命令缓冲上打了 `VK_EXT_debug_utils` 标记，RenderDoc 截帧时按这些名字分段显示耗时。扩展不可用时标记为空操作。
 - GPU 锁频面板不显示：它依赖桌面的 `nvidia-smi`。
 - 相机固定在初始化位置，没有键盘输入；触摸事件交给 ImGui 的安卓后端，面板上的滑块和按钮可以直接操作。
 - 帧率上限 60 FPS，避免无界空转发热。
 
-安装与查看日志：
+### 安卓测试方法
+
+adb 的目标设备由设备序列号指定，序列号用 `adb devices` 查询。只连接一台设备时，命令里的 `-s <serial>` 可以省略；同时连接多台设备时必须逐条带上，否则 adb 无法确定操作哪一台。构建出 `scripts\build_android.bat` 的 APK 后按下面方式安装并查看日志：
 
 ```
-adb install -r android\app\build\outputs\apk\debug\app-debug.apk
-adb logcat -s VulkanIndirectDrawDemo
+adb -s <serial> install -r android\app\build\outputs\apk\debug\app-debug.apk
+adb -s <serial> logcat -s VulkanIndirectDrawDemo
 ```
 
-用 RenderDoc 在真机上截帧不需要在本机启动 qrenderdoc：`scripts\renderdoc_capture.bat start` 通过 adb 完成整套准备——启动设备上的 RenderDoc 远程服务 `org.renderdoc.renderdoccmd.arm64`，把 `VK_LAYER_RENDERDOC_Capture` 挂到本应用的包名上，再以带层的方式启动应用；`scripts\renderdoc_capture.bat stop` 撤销这些全局设置。截帧文件由设备端 RenderDoc 写入 `/sdcard/Android/media/com.example.vulkanindirectdrawdemo/files/RenderDoc/`。手机需要先安装 RenderDoc 的 `org.renderdoc.renderdoccmd.arm64` 与本应用。脚本复刻标准 RenderDoc 安卓挂载流程，纯批处理实现，不依赖 python。
+应用内置回环 TCP 控制服务（桌面与安卓一致，端口 21000），连接后按行发命令：`path`/`instances`/`lights`/`far` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`capture` 触发 RenderDoc 截一帧，`quit` 退出。安卓端经 `adb forward tcp:21000 tcp:21000` 把设备上的控制端口映射到本机。
 
-应用内置回环 TCP 控制服务（桌面与安卓一致，端口 21000），测试脚本连接后按行发命令：`path`/`instances`/`lights`/`far` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`capture` 触发 RenderDoc 截一帧，`quit` 退出。安卓端经 `adb forward tcp:21000 tcp:21000` 把设备上的控制端口映射到本机。`scripts\measure_android.bat` 用这套接口在真机上跑与 `measure_pc.bat` 相同的配置网格，把每段返回的行写进 `intermediate\measure_report_android.csv`。
+耗时的自动化测量由 `scripts\measure_android.bat` 完成，它用上面的 TCP 接口在真机上跑与 `measure_pc.bat` 相同的配置网格、但实例数量取十分之一，把每段返回的行写进 `intermediate\measure_report_android.csv`。第一个参数是可选的设备序列号，多台设备连接时必需：
+
+```
+scripts\measure_android.bat [serial]
+```
+
+用 RenderDoc 在真机上截帧不需要在本机启动 qrenderdoc。`scripts\renderdoc_capture.bat start` 通过 adb 完成整套准备——启动设备上的 RenderDoc 远程服务 `org.renderdoc.renderdoccmd.arm64`，把 `VK_LAYER_RENDERDOC_Capture` 挂到本应用的包名上，再以带层的方式启动应用；`scripts\renderdoc_capture.bat stop` 撤销这些全局设置。序列号是 start/stop 之后的可选参数，多台设备连接时必需：
+
+```
+scripts\renderdoc_capture.bat start [serial]
+scripts\renderdoc_capture.bat stop  [serial]
+```
+
+截帧文件由设备端 RenderDoc 写入 `/sdcard/Android/media/com.example.vulkanindirectdrawdemo/files/RenderDoc/`。手机需要先安装 RenderDoc 的 `org.renderdoc.renderdoccmd.arm64` 与本应用。脚本复刻标准 RenderDoc 安卓挂载流程，纯批处理实现，不依赖 python。
 
 ## 运行
 
@@ -189,7 +204,7 @@ scripts\measure_pc.bat
 scripts\measure_android.bat
 ```
 
-`verify_paths.bat` 在一千、两万、二十万、一百万实例下分别运行三条路径，对比可见实例数量。`measure_pc.bat` 在 PC 上、`measure_android.bat` 在安卓真机上执行同一套配置网格（三组实例数/远裁剪面 × 三条路径）的耗时测量。桌面版启动一个带 TCP 控制服务的进程，把每组配置当作一个测量分段，分段结束时把该段的均值/标准差追加进 `intermediate\measure_report.csv`；安卓版把设备上的控制端口经 `adb forward` 映射到本机，从每段的 `end` 回复里收集同一格式的行，写进 `intermediate\measure_report_android.csv`。桌面测量关闭界面，安卓测量保留界面。
+`verify_paths.bat` 在一千、两万、二十万、一百万实例下分别运行三条路径，对比可见实例数量。`measure_pc.bat` 在 PC 上、`measure_android.bat` 在安卓真机上按同一个网格做耗时测量：三组（实例数, 远裁剪面）配置各跑三条路径，即 20 万@160、20 万@420、100 万@160；安卓的实例数量取十分之一，即 2 万@160、2 万@420、10 万@160，因为手机承受不了桌面级的实例数量。桌面版启动一个带 TCP 控制服务的进程，把每组配置当作一个测量分段，分段结束时把该段的均值/标准差追加进 `intermediate\measure_report.csv`；安卓版把设备上的控制端口经 `adb forward` 映射到本机，从每段的 `end` 回复里收集同一格式的行，写进 `intermediate\measure_report_android.csv`。桌面测量关闭界面，安卓测量保留界面。
 
 全部脚本的提示文字与生成的报告都使用英文，报告一律是 CSV 格式，可以直接导入表格软件。
 
@@ -287,7 +302,7 @@ G-Buffer 由三张颜色附件与一张深度附件组成：
 | `src/vk_resources.cpp` | 缓冲与纹理的创建上传、多级渐远纹理生成、着色器模块加载 |
 | `src/obj_loader.cpp` | obj 解析、顶点去重、模型居中与包围球计算 |
 | `src/scene.cpp` | 实例网格生成与排序、跟随相机的光源平铺、相机控制、视锥平面提取、主机侧剔除 |
-| `src/renderer.cpp` | 渲染通道、描述符、三条管线、三条绘制路径与时间戳查询（安卓上不查询） |
+| `src/renderer.cpp` | 渲染通道、描述符、三条管线、三条绘制路径与时间戳查询（设备不支持时间戳时自动不测，设备时间如实显示为零） |
 | `src/timing.cpp` | 计时项定义、滑动窗口统计、启动至今的历史曲线、测量报告的在线统计 |
 | `src/user_interface.cpp` | imgui 与 implot 初始化、字体与字形校验、控制面板、耗时曲线绘制 |
 | `src/gpu_clock_lock.cpp` | 桌面实现调用 `nvidia-smi` 探测显卡与锁频，安卓实现为整组"不可用" |

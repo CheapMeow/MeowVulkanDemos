@@ -97,6 +97,9 @@ struct Renderer {
     VkPipeline cullPipeline;
 
     float timestampPeriodNanoseconds;
+    // 设备是否支持时间戳查询：驱动报告 timestampComputeAndGraphics 且图形队列族的
+    // timestampValidBits 非零才建查询池。桌面独显与多数安卓移动 GPU 都满足
+    bool timestampsSupported;
 
     VulkanMarkers markers;  // 命令缓冲上的调试标记，RenderDoc 按名字分段显示耗时
 
