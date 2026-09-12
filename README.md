@@ -8,6 +8,7 @@
 | --- | --- |
 | [`cases/indirect_draw`](cases/indirect_draw/README.md) | 延迟渲染场景，对比逐实例、实例化与 indirect 三条几何提交路径 |
 | [`cases/shadow`](cases/shadow/README.md) | 方向光阴影贴图，对比无阴影、硬阴影与 PCF 软阴影 |
+| [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
 
 ## 目录结构
 

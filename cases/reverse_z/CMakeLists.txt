@@ -1,0 +1,19 @@
+# reverse_z case：共面地面的深度精度与 Reverse-Z
+meow_add_case(reverse_z
+    SOURCES
+        src/renderer.cpp
+        src/scene_setup.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/ground.vert
+        shaders/ground.frag
+        shaders/object.vert
+        shaders/object.frag
+    SHADER_INCLUDES
+        shaders/scene_common.glsl
+)
