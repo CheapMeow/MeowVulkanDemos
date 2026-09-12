@@ -188,6 +188,9 @@ static void createLogicalDevice(VulkanContext& ctx)
     features.samplerAnisotropy = VK_TRUE;
     features.multiDrawIndirect = VK_TRUE;
     features.drawIndirectFirstInstance = VK_TRUE;
+    // 片元着色器里的原子累加用于帧内计数回读
+    features.fragmentStoresAndAtomics = VK_TRUE;
+    features.vertexPipelineStoresAndAtomics = VK_TRUE;
 
     VkDeviceCreateInfo deviceInfo = {};
     deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

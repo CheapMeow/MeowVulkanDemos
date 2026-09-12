@@ -272,7 +272,8 @@ void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigne
 }
 
 void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t height, VkFormat format,
-                             VkImageUsageFlags usage, VkImageAspectFlags aspect, GpuTexture& outTexture)
+                             VkImageUsageFlags usage, VkImageAspectFlags aspect, GpuTexture& outTexture,
+                             VkSampleCountFlagBits samples)
 {
     outTexture = GpuTexture();
     outTexture.width = width;
@@ -288,7 +289,7 @@ void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t 
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.samples = samples;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = usage;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;

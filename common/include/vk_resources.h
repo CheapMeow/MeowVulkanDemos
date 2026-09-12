@@ -49,7 +49,8 @@ void createTextureFromRgba(const VulkanContext& ctx, uint32_t width, uint32_t he
                            const unsigned char* pixels, bool srgb, GpuTexture& outTexture,
                            VkImageView* outAlternateView = nullptr);
 void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t height, VkFormat format,
-                             VkImageUsageFlags usage, VkImageAspectFlags aspect, GpuTexture& outTexture);
+                             VkImageUsageFlags usage, VkImageAspectFlags aspect, GpuTexture& outTexture,
+                             VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
 void destroyTexture(const VulkanContext& ctx, GpuTexture& texture);
 
 VkSampler createLinearSampler(const VulkanContext& ctx, uint32_t mipLevels);
