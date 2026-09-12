@@ -41,10 +41,13 @@ void destroyBuffer(const VulkanContext& ctx, GpuBuffer& buffer);
 void uploadBufferData(const VulkanContext& ctx, const GpuBuffer& target, const void* data, VkDeviceSize size);
 
 void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigned char>& fileBytes, bool srgb,
-                             GpuTexture& outTexture);
-// 用已经解好的 RGBA8 像素建纹理，同样按逐级缩小生成多级渐远纹理
+                             GpuTexture& outTexture, VkImageView* outAlternateView = nullptr);
+// 用已经解好的 RGBA8 像素建纹理，同样按逐级缩小生成多级渐远纹理。
+// outAlternateView 非空时，图像按可换格式创建，并额外给出一张按相反格式解释的视图：
+// srgb 为真时主视图是 sRGB、附加视图是线性，srgb 为假时相反
 void createTextureFromRgba(const VulkanContext& ctx, uint32_t width, uint32_t height,
-                           const unsigned char* pixels, bool srgb, GpuTexture& outTexture);
+                           const unsigned char* pixels, bool srgb, GpuTexture& outTexture,
+                           VkImageView* outAlternateView = nullptr);
 void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t height, VkFormat format,
                              VkImageUsageFlags usage, VkImageAspectFlags aspect, GpuTexture& outTexture);
 void destroyTexture(const VulkanContext& ctx, GpuTexture& texture);

@@ -120,7 +120,8 @@ static void transitionImageLayout(VkCommandBuffer commandBuffer, VkImage image, 
 }
 
 void createTextureFromRgba(const VulkanContext& ctx, uint32_t width, uint32_t height,
-                           const unsigned char* pixels, bool srgb, GpuTexture& outTexture)
+                           const unsigned char* pixels, bool srgb, GpuTexture& outTexture,
+                           VkImageView* outAlternateView)
 {
     outTexture = GpuTexture();
     outTexture.width = width;
@@ -157,6 +158,10 @@ void createTextureFromRgba(const VulkanContext& ctx, uint32_t width, uint32_t he
                       VK_IMAGE_USAGE_SAMPLED_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    // 需要第二张按另一种格式解释的视图时，图像必须以可换格式创建
+    if (outAlternateView != nullptr) {
+        imageInfo.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+    }
     VK_CHECK(vkCreateImage(ctx.device, &imageInfo, nullptr, &outTexture.image));
 
     VkMemoryRequirements requirements = {};
@@ -239,10 +244,16 @@ void createTextureFromRgba(const VulkanContext& ctx, uint32_t width, uint32_t he
     viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.layerCount = 1;
     VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, &outTexture.view));
+
+    if (outAlternateView != nullptr) {
+        // 同一份数据按另一种格式解释：线性与 sRGB 属于同一个格式兼容类，可以共用一张图像
+        viewInfo.format = srgb ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8A8_SRGB;
+        VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, outAlternateView));
+    }
 }
 
 void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigned char>& fileBytes, bool srgb,
-                             GpuTexture& outTexture)
+                             GpuTexture& outTexture, VkImageView* outAlternateView)
 {
     int width = 0;
     int height = 0;
@@ -254,7 +265,7 @@ void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigne
     }
 
     createTextureFromRgba(ctx, static_cast<uint32_t>(width), static_cast<uint32_t>(height), pixels, srgb,
-                          outTexture);
+                          outTexture, outAlternateView);
     stbi_image_free(pixels);
 
     std::printf("loaded texture: %ux%u, mip levels %u\n", outTexture.width, outTexture.height, outTexture.mipLevels);
