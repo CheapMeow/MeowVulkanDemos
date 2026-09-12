@@ -119,21 +119,12 @@ static void transitionImageLayout(VkCommandBuffer commandBuffer, VkImage image, 
     vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
-void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigned char>& fileBytes, bool srgb,
-                             GpuTexture& outTexture)
+void createTextureFromRgba(const VulkanContext& ctx, uint32_t width, uint32_t height,
+                           const unsigned char* pixels, bool srgb, GpuTexture& outTexture)
 {
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-    stbi_uc* pixels = stbi_load_from_memory(fileBytes.data(), static_cast<int>(fileBytes.size()), &width, &height,
-                                           &channels, STBI_rgb_alpha);
-    if (pixels == nullptr) {
-        FATAL("failed to load texture from memory: %s", stbi_failure_reason());
-    }
-
     outTexture = GpuTexture();
-    outTexture.width = static_cast<uint32_t>(width);
-    outTexture.height = static_cast<uint32_t>(height);
+    outTexture.width = width;
+    outTexture.height = height;
 
     uint32_t mipLevels = 1;
     uint32_t largestSide = outTexture.width > outTexture.height ? outTexture.width : outTexture.height;
@@ -150,7 +141,6 @@ void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigne
     createBuffer(ctx, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging);
     std::memcpy(staging.mapped, pixels, static_cast<size_t>(imageSize));
-    stbi_image_free(pixels);
 
     VkImageCreateInfo imageInfo = {};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -249,8 +239,25 @@ void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigne
     viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.layerCount = 1;
     VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, &outTexture.view));
+}
 
-    std::printf("loaded texture: %ux%u, mip levels %u\n", outTexture.width, outTexture.height, mipLevels);
+void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigned char>& fileBytes, bool srgb,
+                             GpuTexture& outTexture)
+{
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(fileBytes.data(), static_cast<int>(fileBytes.size()), &width, &height,
+                                           &channels, STBI_rgb_alpha);
+    if (pixels == nullptr) {
+        FATAL("failed to load texture from memory: %s", stbi_failure_reason());
+    }
+
+    createTextureFromRgba(ctx, static_cast<uint32_t>(width), static_cast<uint32_t>(height), pixels, srgb,
+                          outTexture);
+    stbi_image_free(pixels);
+
+    std::printf("loaded texture: %ux%u, mip levels %u\n", outTexture.width, outTexture.height, outTexture.mipLevels);
 }
 
 void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t height, VkFormat format,

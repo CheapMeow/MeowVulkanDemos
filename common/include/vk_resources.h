@@ -42,6 +42,9 @@ void uploadBufferData(const VulkanContext& ctx, const GpuBuffer& target, const v
 
 void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigned char>& fileBytes, bool srgb,
                              GpuTexture& outTexture);
+// 用已经解好的 RGBA8 像素建纹理，同样按逐级缩小生成多级渐远纹理
+void createTextureFromRgba(const VulkanContext& ctx, uint32_t width, uint32_t height,
+                           const unsigned char* pixels, bool srgb, GpuTexture& outTexture);
 void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t height, VkFormat format,
                              VkImageUsageFlags usage, VkImageAspectFlags aspect, GpuTexture& outTexture);
 void destroyTexture(const VulkanContext& ctx, GpuTexture& texture);
