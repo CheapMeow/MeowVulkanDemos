@@ -330,8 +330,8 @@ static void createGBufferPipeline(const VulkanContext& ctx, Renderer& renderer)
     layoutInfo.pSetLayouts = setLayouts;
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.gbufferPipelineLayout));
 
-    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/gbuffer.vert.spv"));
-    VkShaderModule fragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/gbuffer.frag.spv"));
+    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/gbuffer.vert.spv"));
+    VkShaderModule fragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/gbuffer.frag.spv"));
 
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -442,8 +442,8 @@ static void createLightingPipeline(const VulkanContext& ctx, Renderer& renderer)
     layoutInfo.pSetLayouts = setLayouts;
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.lightingPipelineLayout));
 
-    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/fullscreen.vert.spv"));
-    VkShaderModule fragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/lighting.frag.spv"));
+    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/fullscreen.vert.spv"));
+    VkShaderModule fragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/lighting.frag.spv"));
 
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -529,7 +529,7 @@ static void createCullPipeline(const VulkanContext& ctx, Renderer& renderer)
     layoutInfo.pSetLayouts = setLayouts;
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.cullPipelineLayout));
 
-    VkShaderModule computeModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/cull.comp.spv"));
+    VkShaderModule computeModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/cull.comp.spv"));
 
     VkPipelineShaderStageCreateInfo stage = {};
     stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

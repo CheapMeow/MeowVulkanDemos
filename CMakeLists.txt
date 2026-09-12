@@ -171,11 +171,19 @@ function(meow_add_case case_name)
 
     target_link_libraries(${case_target} PRIVATE demo_common)
 
-    # 把 case 自己的 GLSL 编译成 SPIR-V，输出目录由平台决定，运行时的名字都是 shaders/xxx.spv
+    # 把 case 自己的 GLSL 编译成 SPIR-V。不同 case 的着色器可能重名（例如都叫 ground.frag），
+    # 输出按 case 名字放进各自的子目录，运行时的前缀是 DEMO_SHADER_DIR 指向的 shaders/<case>。
+    # 输出路径带上 case 名字，ninja 的时间戳比较也只会看到本 case 的文件，不会被别的 case 覆盖
+    set(shader_output_dir "${DEMO_SHADER_OUTPUT_DIR}/${case_name}")
+    file(MAKE_DIRECTORY "${shader_output_dir}")
+    target_compile_definitions(${case_target} PRIVATE
+        DEMO_SHADER_DIR="shaders/${case_name}"
+    )
+
     set(compiled_shaders)
     foreach(shader_source ${ARG_SHADERS})
         get_filename_component(shader_name "${shader_source}" NAME)
-        set(shader_output "${DEMO_SHADER_OUTPUT_DIR}/${shader_name}.spv")
+        set(shader_output "${shader_output_dir}/${shader_name}.spv")
         add_custom_command(
             OUTPUT "${shader_output}"
             COMMAND "${GLSLC_EXECUTABLE}" -O --target-env=${DEMO_SHADER_TARGET_ENV}

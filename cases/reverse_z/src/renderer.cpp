@@ -215,12 +215,12 @@ static void createMainPipelines(const VulkanContext& ctx, ReverseZRenderer& rend
     layoutInfo.pSetLayouts = setLayouts;
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.pipelineLayout));
 
-    VkShaderModule groundVertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/ground.vert.spv"));
+    VkShaderModule groundVertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/ground.vert.spv"));
     VkShaderModule groundFragmentModule =
-        loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/ground.frag.spv"));
-    VkShaderModule objectVertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/object.vert.spv"));
+        loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/ground.frag.spv"));
+    VkShaderModule objectVertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/object.vert.spv"));
     VkShaderModule objectFragmentModule =
-        loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/object.frag.spv"));
+        loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/object.frag.spv"));
 
     VkVertexInputBindingDescription vertexBinding = {};
     VkVertexInputAttributeDescription vertexAttributes[3] = {};

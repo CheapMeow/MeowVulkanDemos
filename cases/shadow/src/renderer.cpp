@@ -351,9 +351,9 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
     layoutInfo.pSetLayouts = &renderer.sceneSetLayout;
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.shadowPipelineLayout));
 
-    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/shadow.vert.spv"));
+    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/shadow.vert.spv"));
     VkShaderModule fragmentModule =
-        loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/shadow.frag.spv"));
+        loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/shadow.frag.spv"));
 
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0] = makeShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vertexModule);
@@ -460,9 +460,9 @@ static void createMainPipelines(const VulkanContext& ctx, ShadowRenderer& render
     layoutInfo.pSetLayouts = setLayouts;
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.scenePipelineLayout));
 
-    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/scene.vert.spv"));
-    VkShaderModule sceneFragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/scene.frag.spv"));
-    VkShaderModule groundFragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/ground.frag.spv"));
+    VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/scene.vert.spv"));
+    VkShaderModule sceneFragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/scene.frag.spv"));
+    VkShaderModule groundFragmentModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/ground.frag.spv"));
 
     VkVertexInputBindingDescription vertexBinding = {};
     VkVertexInputAttributeDescription vertexAttributes[3] = {};

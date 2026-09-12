@@ -50,7 +50,7 @@ scripts\fetch_assets.bat
 scripts\build.bat [case]
 ```
 
-case 省略时构建 `indirect_draw`。脚本调用 Visual Studio 自带的 CMake 与 Ninja 完成配置与编译，并用 `glslc` 把该 case `shaders` 目录下的 GLSL 编译成 SPIR-V 到 `build/shaders`。产物是 `build\meow_<case>.exe`。
+case 省略时构建 `indirect_draw`。脚本调用 Visual Studio 自带的 CMake 与 Ninja 完成配置与编译，并用 `glslc` 把该 case `shaders` 目录下的 GLSL 编译成 SPIR-V 到 `build/shaders/<case>`。不同 case 的着色器可能重名，输出按 case 名字分开存放，运行时的前缀由 `DEMO_SHADER_DIR` 给出。产物是 `build\meow_<case>.exe`。
 
 依赖路径全部从环境变量读取，脚本里不含任何本机路径：`VS_DIR` 指向 Visual Studio 安装目录，`VULKAN_SDK_DIR` 指向 Vulkan SDK 目录。全局环境不满足时，在 `scripts\` 下放一个不入库的 `local_env.bat`，构建脚本检测到存在就先执行它，例如：
 
@@ -83,7 +83,7 @@ set "VULKAN_SDK_DIR=D:\path\to\VulkanSDK"
 
 - `android\` 是 Gradle 工程，只有一个 `:app` 模块。模块内的 `CMakeLists.txt` 把仓库根目录的 `CMakeLists.txt` 作为子目录加进来，NDK 工具链由 AGP 提供，源码与桌面端共用一份。
 - 入口是各 case 的 `src\android_main.cpp`，走系统自带的 NativeActivity 与 NDK 的 `native_app_glue`，不写 Java 代码，也不依赖 AndroidX 库。
-- 模型、贴图、字体、着色器全部作为 assets 打进 APK：Gradle 在打包前把仓库 `assets\backpack` 复制到 `android\app\src\main\assets\backpack`，把系统字体 `msyh.ttc` 复制到 `assets\fonts`；CMake 把编译出的 `.spv` 直接写进 `assets\shaders`。AAssetManager 以 APK 的 assets 目录为根，代码里资源名不带 `assets/` 前缀。这些目录是构建产物，不入库。
+- 模型、贴图、字体、着色器全部作为 assets 打进 APK：Gradle 在打包前把仓库 `assets\backpack` 复制到 `android\app\src\main\assets\backpack`，把系统字体 `msyh.ttc` 复制到 `assets\fonts`；CMake 把编译出的 `.spv` 直接写进 `assets\shaders\<case>`。AAssetManager 以 APK 的 assets 目录为根，代码里资源名不带 `assets/` 前缀。这些目录是构建产物，不入库。
 - 桌面代码读文件用的是 `readAssetBytes`，安卓端实现换成 `AAssetManager`，模型、贴图、SPIR-V 都以字节流形式从内存加载，调用方不区分平台。
 
 ## 资源来源
