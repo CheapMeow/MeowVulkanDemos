@@ -11,15 +11,14 @@
 
 ## 目录结构
 
-```
-common/                 各 case 共用的代码：Vulkan 上下文与资源、资源读取、模型解析、
-                        场景与相机、计时统计、界面公共面板、TCP 控制服务、抓帧、锁频
-cases/<名字>/           一个 case 的全部内容：入口、渲染器、控制面板、着色器、README
-android/                两个平台共用的 Gradle 工程，按 case 名字打包
-scripts/                构建、资源下载与测量脚本
-external/               第三方库，以 git submodule 引入
-assets/                 下载来的模型与贴图，不入库
-```
+| 目录 | 内容 |
+| --- | --- |
+| `common/` | 各 case 共用的代码：Vulkan 上下文与资源、资源读取、模型解析、场景与相机、计时统计、界面公共面板、TCP 控制服务、抓帧、锁频 |
+| `cases/<名字>/` | 一个 case 的全部内容：入口、渲染器、控制面板、着色器、README |
+| `android/` | 两个平台共用的 Gradle 工程，按 case 名字打包 |
+| `scripts/` | 构建、资源下载与测量脚本 |
+| `external/` | 第三方库，以 git submodule 引入 |
+| `assets/` | 下载来的模型与贴图，不入库 |
 
 ## 依赖
 
