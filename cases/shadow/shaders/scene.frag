@@ -12,7 +12,7 @@ layout(set = 1, binding = 1) uniform sampler2D normalMap;
 layout(set = 1, binding = 2) uniform sampler2D metallicMap;
 layout(set = 1, binding = 3) uniform sampler2D roughnessMap;
 layout(set = 1, binding = 4) uniform sampler2D ambientOcclusionMap;
-layout(set = 1, binding = 5) uniform sampler2DShadow shadowMap;
+layout(set = 1, binding = 5) uniform sampler2D shadowMap;
 
 #include "shadow_sampling.glsl"
 #include "lighting_common.glsl"

@@ -8,7 +8,7 @@ layout(location = 1) in vec3 inWorldNormal;
 layout(location = 2) in vec2 inUv;
 
 // 地面只用阴影贴图，材质贴图不参与
-layout(set = 1, binding = 5) uniform sampler2DShadow shadowMap;
+layout(set = 1, binding = 5) uniform sampler2D shadowMap;
 
 #include "shadow_sampling.glsl"
 #include "lighting_common.glsl"

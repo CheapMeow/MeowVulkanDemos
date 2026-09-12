@@ -93,8 +93,8 @@ static std::string shadowReportPrefix(uint32_t instances, uint32_t drawCommands)
 
 // 由光源的两个角度与场景半径构造光源的正交投影
 static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm::vec3& lightDirection,
-                              float sceneRadius, bool shadowsEnabled, bool pcfEnabled,
-                              ShadowSceneUniform& outUniform)
+                              float sceneRadius, uint32_t shadowMapSize, bool shadowsEnabled,
+                              bool pcfEnabled, ShadowSceneUniform& outUniform)
 {
     CameraMatrices matrices;
     fillCameraMatrices(camera, aspectRatio, matrices);
@@ -114,7 +114,7 @@ static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm
 
     outUniform.lightDirection = glm::vec4(lightDirection, 0.0f);
     outUniform.lightColor = glm::vec4(1.0f, 0.96f, 0.9f, 3.0f);
-    outUniform.shadowParams = glm::vec4(0.0005f, 1.0f / static_cast<float>(SHADOW_MAP_SIZE),
+    outUniform.shadowParams = glm::vec4(0.0005f, 1.0f / static_cast<float>(shadowMapSize),
                                         pcfEnabled ? 1.0f : 0.0f, shadowsEnabled ? 1.0f : 0.0f);
 }
 
@@ -145,7 +145,7 @@ static void initializeRendererStack(AppState& state, android_app* app)
     state.instances.push_back(groundInstance);
 
     createRenderer(state.ctx, state.renderer, state.objectMesh, state.groundMesh, state.instances,
-                   groundInstanceIndex);
+                   groundInstanceIndex, state.uiState.shadowMapSize, state.uiState.shadowMapBits);
 
     int caseTextCount = 0;
     const char* const* caseTexts = caseInterfaceTexts(caseTextCount);
@@ -303,14 +303,16 @@ static void drawOneFrame(AppState& state)
                               static_cast<float>(state.ctx.swapchainExtent.height);
 
     ShadowSceneUniform sceneUniform;
-    fillShadowUniform(state.camera, aspectRatio, lightDirection, sceneRadius, state.uiState.shadowsEnabled,
-                      state.uiState.pcfEnabled, sceneUniform);
+    fillShadowUniform(state.camera, aspectRatio, lightDirection, sceneRadius, state.uiState.shadowMapSize,
+                      state.uiState.shadowsEnabled, state.uiState.pcfEnabled, sceneUniform);
 
     FrameInput input = {};
     input.activeInstanceCount = activeInstanceCount;
     input.drawUserInterface = true;
     input.shadowsEnabled = state.uiState.shadowsEnabled;
     input.pcfRadius = state.uiState.pcfEnabled ? 1.0f : 0.0f;
+    input.shadowMapSize = state.uiState.shadowMapSize;
+    input.shadowMapBits = state.uiState.shadowMapBits;
 
     FrameStatistics statistics = {};
     const bool frameDrawn = drawFrame(state.ctx, state.renderer, state.frameCounter, input, sceneUniform,
@@ -402,6 +404,24 @@ static void installControlHandler(AppState& state)
             resetTimingWindows(state.timingStore);
             return "ok";
         }
+        if (verb == "shadow-size") {
+            long value = 0;
+            if (!(stream >> value) || value < SHADOW_MAP_MIN_SIZE || value > SHADOW_MAP_MAX_SIZE) {
+                return "err: shadow-size out of range";
+            }
+            state.uiState.shadowMapSize = static_cast<uint32_t>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "shadow-bits") {
+            long value = 0;
+            if (!(stream >> value) || (value != 8 && value != 16 && value != 32)) {
+                return "err: shadow-bits takes 8, 16 or 32";
+            }
+            state.uiState.shadowMapBits = static_cast<uint32_t>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
         if (verb == "begin") {
             state.segmentActive = true;
             state.segmentStartSeconds = nowSeconds();
@@ -444,6 +464,8 @@ void android_main(android_app* app)
     state.uiState.lightPitchDegrees = 30.0f;
     state.uiState.shadowsEnabled = true;
     state.uiState.pcfEnabled = true;
+    state.uiState.shadowMapSize = SHADOW_MAP_DEFAULT_SIZE;
+    state.uiState.shadowMapBits = SHADOW_MAP_DEFAULT_BITS;
 
     app->userData = &state;
     app->onAppCmd = handleAppCommand;

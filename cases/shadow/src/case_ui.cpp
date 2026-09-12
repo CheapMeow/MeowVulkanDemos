@@ -21,9 +21,43 @@ static const char* const TEXT_LIGHT_PITCH = "高度角";
 static const char* const TEXT_SHADOWS = "启用阴影";
 static const char* const TEXT_PCF = "PCF 软阴影";
 
+static const char* const TEXT_SECTION_SHADOW_MAP = "阴影贴图";
+static const char* const TEXT_SHADOW_MAP_SIZE = "分辨率";
+static const char* const TEXT_SHADOW_MAP_BITS = "深度值位数";
+
+// 分辨率与位数两列可选值，控件在下标与取值之间换算
+static const uint32_t SHADOW_MAP_SIZE_VALUES[] = { 512, 1024, 2048, 4096 };
+static const char* const SHADOW_MAP_SIZE_LABELS[] = { "512", "1024", "2048", "4096" };
+static const uint32_t SHADOW_MAP_BITS_VALUES[] = { 8, 16, 32 };
+static const char* const SHADOW_MAP_BITS_LABELS[] = { "8 位", "16 位", "32 位" };
+
+enum { SHADOW_MAP_SIZE_VALUE_COUNT = sizeof(SHADOW_MAP_SIZE_VALUES) / sizeof(SHADOW_MAP_SIZE_VALUES[0]) };
+enum { SHADOW_MAP_BITS_VALUE_COUNT = sizeof(SHADOW_MAP_BITS_VALUES) / sizeof(SHADOW_MAP_BITS_VALUES[0]) };
+
+static int shadowMapSizeIndex(uint32_t size)
+{
+    for (int i = 0; i < SHADOW_MAP_SIZE_VALUE_COUNT; ++i) {
+        if (SHADOW_MAP_SIZE_VALUES[i] == size) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+static int shadowMapBitsIndex(uint32_t bits)
+{
+    for (int i = 0; i < SHADOW_MAP_BITS_VALUE_COUNT; ++i) {
+        if (SHADOW_MAP_BITS_VALUES[i] == bits) {
+            return i;
+        }
+    }
+    return 0;
+}
+
 static const char* const TEXT_SECTION_WORKLOAD = "本帧工作量";
 static const char* const TEXT_DRAW_COMMANDS = "绘制命令 %u 条";
-static const char* const TEXT_SHADOW_MAP = "阴影贴图 2048 × 2048，深度偏移与纹素大小由光源正交投影决定";
+static const char* const TEXT_SHADOW_MAP =
+    "当前贴图 %u × %u，每纹素 %u 位深度，深度偏移与纹素大小由光源正交投影决定";
 
 static const char* const TEXT_SECTION_GUIDE = "操作指南";
 static const char* const TEXT_GUIDE_MOVE = "W A S D 前后左右移动，Q 下降，E 上升";
@@ -32,16 +66,22 @@ static const char* const TEXT_GUIDE_QUIT = "Esc 退出程序";
 static const char* const TEXT_GUIDE_DRAG = "拖动标题栏可以移动本面板";
 
 static const char* const TEXT_EXPLANATION =
-    "阴影通道从光源方向把背面深度写进一张深度贴图，主通道把像素投影到同一张贴图上做深度比较。"
+    "阴影通道从光源方向把背面深度写进一张贴图，主通道把像素投影到同一张贴图上做深度比较。"
     "关掉阴影后地面与物体的明暗不再被遮挡关系影响，打开 PCF 则改为在 3×3 范围内多次比较，"
-    "阴影边缘从硬边变成渐变。";
+    "阴影边缘从硬边变成渐变。降低分辨率会让阴影边界变粗糙，降低深度值位数会让深度比较的"
+    "档位变少，自阴影条纹随之加重。";
 
 static const char* const CASE_INTERFACE_TEXTS[] = {
-    TEXT_PANEL_TITLE,      TEXT_SECTION_SCENE,      TEXT_INSTANCE_COUNT, TEXT_MOVE_SPEED,
-    TEXT_SECTION_LIGHT,    TEXT_LIGHT_YAW,          TEXT_LIGHT_PITCH,    TEXT_SHADOWS,
-    TEXT_PCF,              TEXT_SECTION_WORKLOAD,   TEXT_DRAW_COMMANDS,  TEXT_SHADOW_MAP,
-    TEXT_SECTION_GUIDE,    TEXT_GUIDE_MOVE,         TEXT_GUIDE_LOOK,     TEXT_GUIDE_QUIT,
-    TEXT_GUIDE_DRAG,       TEXT_EXPLANATION,
+    TEXT_PANEL_TITLE,          TEXT_SECTION_SCENE,        TEXT_INSTANCE_COUNT,
+    TEXT_MOVE_SPEED,           TEXT_SECTION_LIGHT,        TEXT_LIGHT_YAW,
+    TEXT_LIGHT_PITCH,          TEXT_SHADOWS,              TEXT_PCF,
+    TEXT_SECTION_SHADOW_MAP,   TEXT_SHADOW_MAP_SIZE,      TEXT_SHADOW_MAP_BITS,
+    SHADOW_MAP_SIZE_LABELS[0], SHADOW_MAP_SIZE_LABELS[1], SHADOW_MAP_SIZE_LABELS[2],
+    SHADOW_MAP_SIZE_LABELS[3], SHADOW_MAP_BITS_LABELS[0], SHADOW_MAP_BITS_LABELS[1],
+    SHADOW_MAP_BITS_LABELS[2], TEXT_SECTION_WORKLOAD,     TEXT_DRAW_COMMANDS,
+    TEXT_SHADOW_MAP,           TEXT_SECTION_GUIDE,        TEXT_GUIDE_MOVE,
+    TEXT_GUIDE_LOOK,           TEXT_GUIDE_QUIT,           TEXT_GUIDE_DRAG,
+    TEXT_EXPLANATION,
 };
 
 enum { CASE_INTERFACE_TEXT_COUNT = sizeof(CASE_INTERFACE_TEXTS) / sizeof(CASE_INTERFACE_TEXTS[0]) };
@@ -82,12 +122,22 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
     ImGui::Checkbox(TEXT_SHADOWS, &state.shadowsEnabled);
     ImGui::Checkbox(TEXT_PCF, &state.pcfEnabled);
 
+    ImGui::SeparatorText(TEXT_SECTION_SHADOW_MAP);
+    int sizeIndex = shadowMapSizeIndex(state.shadowMapSize);
+    if (ImGui::Combo(TEXT_SHADOW_MAP_SIZE, &sizeIndex, SHADOW_MAP_SIZE_LABELS, SHADOW_MAP_SIZE_VALUE_COUNT)) {
+        state.shadowMapSize = SHADOW_MAP_SIZE_VALUES[sizeIndex];
+    }
+    int bitsIndex = shadowMapBitsIndex(state.shadowMapBits);
+    if (ImGui::Combo(TEXT_SHADOW_MAP_BITS, &bitsIndex, SHADOW_MAP_BITS_LABELS, SHADOW_MAP_BITS_VALUE_COUNT)) {
+        state.shadowMapBits = SHADOW_MAP_BITS_VALUES[bitsIndex];
+    }
+
     buildGpuClockPanel(gpuClockLockState, gpuClockMonitor);
     buildTimingPanel(timing);
 
     ImGui::SeparatorText(TEXT_SECTION_WORKLOAD);
     ImGui::Text(TEXT_DRAW_COMMANDS, statistics.drawCallCount);
-    ImGui::TextWrapped("%s", TEXT_SHADOW_MAP);
+    ImGui::TextWrapped(TEXT_SHADOW_MAP, state.shadowMapSize, state.shadowMapSize, state.shadowMapBits);
 
     ImGui::SeparatorText(TEXT_SECTION_GUIDE);
     ImGui::BulletText(TEXT_GUIDE_MOVE);

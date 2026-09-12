@@ -2,6 +2,13 @@
 #ifndef SHADOW_SAMPLING_GLSL
 #define SHADOW_SAMPLING_GLSL
 
+// 阴影贴图把深度值存在颜色附件里，比较在着色器里手动完成：
+// 参考深度不大于贴图里存的深度就算受光，否则处在阴影里
+float litFromDepth(float referenceDepth, vec2 uv)
+{
+    return referenceDepth <= texture(shadowMap, uv).r ? 1.0 : 0.0;
+}
+
 // 返回 0 到 1 的受光比例：1 表示完全受光，0 表示完全处在阴影里。
 // 阴影开关关闭时恒为 1
 float sampleShadow(vec3 worldPosition, vec3 normal, float nDotL)
@@ -21,17 +28,18 @@ float sampleShadow(vec3 worldPosition, vec3 normal, float nDotL)
 
     // 掠射角下深度误差更大，偏移随入射角增大
     float bias = max(scene.shadowParams.x * (1.0 - nDotL), scene.shadowParams.x);
+    float referenceDepth = projected.z - bias;
     float radius = scene.shadowParams.z;
 
     if (radius <= 0.0) {
-        return texture(shadowMap, vec3(projected.xy, projected.z - bias));
+        return litFromDepth(referenceDepth, projected.xy);
     }
 
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             vec2 offset = vec2(float(x), float(y)) * scene.shadowParams.y * radius;
-            sum += texture(shadowMap, vec3(projected.xy + offset, projected.z - bias));
+            sum += litFromDepth(referenceDepth, projected.xy + offset);
         }
     }
     return sum / 9.0;

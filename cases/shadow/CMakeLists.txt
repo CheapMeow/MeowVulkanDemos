@@ -13,6 +13,7 @@ meow_add_case(shadow
         shaders/scene.vert
         shaders/scene.frag
         shaders/shadow.vert
+        shaders/shadow.frag
         shaders/ground.frag
     SHADER_INCLUDES
         shaders/scene_common.glsl

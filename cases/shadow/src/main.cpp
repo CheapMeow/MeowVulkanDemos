@@ -56,8 +56,8 @@ static void rebuildSwapchainResources(VulkanContext& ctx, ShadowRenderer& render
 
 // 由光源的两个角度与场景半径构造光源的正交投影
 static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm::vec3& lightDirection,
-                              float sceneRadius, bool shadowsEnabled, bool pcfEnabled,
-                              ShadowSceneUniform& outUniform)
+                              float sceneRadius, uint32_t shadowMapSize, bool shadowsEnabled,
+                              bool pcfEnabled, ShadowSceneUniform& outUniform)
 {
     CameraMatrices matrices;
     fillCameraMatrices(camera, aspectRatio, matrices);
@@ -77,7 +77,7 @@ static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm
 
     outUniform.lightDirection = glm::vec4(lightDirection, 0.0f);
     outUniform.lightColor = glm::vec4(1.0f, 0.96f, 0.9f, 3.0f);
-    outUniform.shadowParams = glm::vec4(0.0005f, 1.0f / static_cast<float>(SHADOW_MAP_SIZE),
+    outUniform.shadowParams = glm::vec4(0.0005f, 1.0f / static_cast<float>(shadowMapSize),
                                         pcfEnabled ? 1.0f : 0.0f, shadowsEnabled ? 1.0f : 0.0f);
 }
 
@@ -97,6 +97,8 @@ int main(int argc, char** argv)
     float lightPitchDegrees = 30.0f;
     bool shadowsEnabled = true;
     bool pcfEnabled = true;
+    uint32_t shadowMapSize = SHADOW_MAP_DEFAULT_SIZE;
+    uint32_t shadowMapBits = SHADOW_MAP_DEFAULT_BITS;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--instances") == 0 && i + 1 < argc) {
@@ -119,6 +121,12 @@ int main(int argc, char** argv)
             pcfEnabled = true;
         } else if (std::strcmp(argv[i], "--no-pcf") == 0) {
             pcfEnabled = false;
+        } else if (std::strcmp(argv[i], "--shadow-size") == 0 && i + 1 < argc) {
+            shadowMapSize = static_cast<uint32_t>(std::atoi(argv[i + 1]));
+            ++i;
+        } else if (std::strcmp(argv[i], "--shadow-bits") == 0 && i + 1 < argc) {
+            shadowMapBits = static_cast<uint32_t>(std::atoi(argv[i + 1]));
+            ++i;
         } else if (std::strcmp(argv[i], "--light-yaw") == 0 && i + 1 < argc) {
             lightYawDegrees = static_cast<float>(std::atof(argv[i + 1]));
             ++i;
@@ -135,6 +143,13 @@ int main(int argc, char** argv)
             requestedMemoryClockMHz = static_cast<uint32_t>(std::atoi(argv[i + 1]));
             ++i;
         }
+    }
+
+    if (shadowMapSize < SHADOW_MAP_MIN_SIZE || shadowMapSize > SHADOW_MAP_MAX_SIZE) {
+        FATAL("--shadow-size must be between %u and %u", SHADOW_MAP_MIN_SIZE, SHADOW_MAP_MAX_SIZE);
+    }
+    if (shadowMapBits != 8 && shadowMapBits != 16 && shadowMapBits != 32) {
+        FATAL("--shadow-bits takes 8, 16 or 32");
     }
 
     // 与 Vulkan、窗口无关，尽早探测，探测不到就在面板里如实显示，不阻止程序继续运行
@@ -198,7 +213,8 @@ int main(int argc, char** argv)
     instances.push_back(groundInstance);
 
     ShadowRenderer renderer = {};
-    createRenderer(ctx, renderer, objectMesh, groundMesh, instances, groundInstanceIndex);
+    createRenderer(ctx, renderer, objectMesh, groundMesh, instances, groundInstanceIndex, shadowMapSize,
+                   shadowMapBits);
 
     UserInterface ui = {};
     int caseTextCount = 0;
@@ -223,6 +239,8 @@ int main(int argc, char** argv)
     uiState.lightPitchDegrees = lightPitchDegrees;
     uiState.shadowsEnabled = shadowsEnabled;
     uiState.pcfEnabled = pcfEnabled;
+    uiState.shadowMapSize = shadowMapSize;
+    uiState.shadowMapBits = shadowMapBits;
 
     UiStatistics uiStatistics = {};
 
@@ -300,6 +318,24 @@ int main(int argc, char** argv)
                 return "err: pcf takes 0 or 1";
             }
             uiState.pcfEnabled = value == 1;
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "shadow-size") {
+            long value = 0;
+            if (!(stream >> value) || value < SHADOW_MAP_MIN_SIZE || value > SHADOW_MAP_MAX_SIZE) {
+                return "err: shadow-size out of range";
+            }
+            uiState.shadowMapSize = static_cast<uint32_t>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "shadow-bits") {
+            long value = 0;
+            if (!(stream >> value) || (value != 8 && value != 16 && value != 32)) {
+                return "err: shadow-bits takes 8, 16 or 32";
+            }
+            uiState.shadowMapBits = static_cast<uint32_t>(value);
             resetTimingWindows(timingStore);
             return "ok";
         }
@@ -417,8 +453,8 @@ int main(int argc, char** argv)
                                   static_cast<float>(ctx.swapchainExtent.height);
 
         ShadowSceneUniform sceneUniform;
-        fillShadowUniform(camera, aspectRatio, lightDirection, sceneRadius, uiState.shadowsEnabled,
-                          uiState.pcfEnabled, sceneUniform);
+        fillShadowUniform(camera, aspectRatio, lightDirection, sceneRadius, uiState.shadowMapSize,
+                          uiState.shadowsEnabled, uiState.pcfEnabled, sceneUniform);
 
         const bool shouldExit = autoExitSeconds > 0.0 && currentTime - startTime >= autoExitSeconds;
         const bool shouldCaptureThisFrame = captureRequested && !captureDone && shouldExit;
@@ -432,6 +468,8 @@ int main(int argc, char** argv)
         input.drawUserInterface = interfaceEnabled;
         input.shadowsEnabled = uiState.shadowsEnabled;
         input.pcfRadius = uiState.pcfEnabled ? 1.0f : 0.0f;
+        input.shadowMapSize = uiState.shadowMapSize;
+        input.shadowMapBits = uiState.shadowMapBits;
         input.captureBuffer = shouldCaptureThisFrame ? &captureBuffer : nullptr;
 
         FrameStatistics statistics = {};

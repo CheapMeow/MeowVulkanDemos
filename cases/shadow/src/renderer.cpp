@@ -9,29 +9,81 @@
 #include <cstring>
 #include <vector>
 
-static const VkFormat SHADOW_DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
 static const VkFormat MAIN_DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
+
+// 阴影通道的深度测试附件，只用来挑出离光源最近的背面，不被采样
+static const VkFormat SHADOW_TEST_DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
+
+VkFormat shadowMapColorFormat(uint32_t bits)
+{
+    if (bits == 8) {
+        return VK_FORMAT_R8_UNORM;
+    }
+    if (bits == 16) {
+        return VK_FORMAT_R16_UNORM;
+    }
+    if (bits == 32) {
+        return VK_FORMAT_R32_SFLOAT;
+    }
+    FATAL("unsupported shadow map bit depth: %u", bits);
+    return VK_FORMAT_UNDEFINED;
+}
+
+static void createShadowSampler(const VulkanContext& ctx, ShadowRenderer& renderer)
+{
+    // 深度值保存在颜色附件里，采样器不做硬件比较，主通道逐纹素取值后在着色器里手动比较。
+    // 滤波必须是最近邻，否则会把相邻纹素的深度值平均掉
+    VkSamplerCreateInfo samplerInfo = {};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    // 贴图范围之外取最远深度，手动比较时判定为受光
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    samplerInfo.maxLod = 0.0f;
+    VK_CHECK(vkCreateSampler(ctx.device, &samplerInfo, nullptr, &renderer.shadowSampler));
+}
 
 static void createShadowRenderPass(const VulkanContext& ctx, ShadowRenderer& renderer)
 {
-    VkAttachmentDescription depthAttachment = {};
-    depthAttachment.format = SHADOW_DEPTH_FORMAT;
-    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkAttachmentDescription attachments[2] = {};
+
+    // 保存深度值的颜色附件，主通道以采样方式读取
+    attachments[0].format = shadowMapColorFormat(renderer.shadowMapBits);
+    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     // 阴影通道结束后主通道以采样方式读取，布局在这里就转到只读
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    // 只用于深度测试的深度附件，内容不需要保留
+    attachments[1].format = SHADOW_TEST_DEPTH_FORMAT;
+    attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef = {};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference depthRef = {};
-    depthRef.attachment = 0;
+    depthRef.attachment = 1;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkSubpassDescription subpass = {};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 0;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
     subpass.pDepthStencilAttachment = &depthRef;
 
     // 上一帧主通道读过阴影贴图，写入前先等它读完；写完之后再交给片元着色器采样
@@ -39,21 +91,23 @@ static void createShadowRenderPass(const VulkanContext& ctx, ShadowRenderer& ren
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass = 0;
     dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                   VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dependencies[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     dependencies[1].srcSubpass = 0;
     dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     VkRenderPassCreateInfo renderPassInfo = {};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &depthAttachment;
+    renderPassInfo.attachmentCount = 2;
+    renderPassInfo.pAttachments = attachments;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 2;
@@ -119,36 +173,27 @@ static void createMainRenderPass(const VulkanContext& ctx, ShadowRenderer& rende
     VK_CHECK(vkCreateRenderPass(ctx.device, &renderPassInfo, nullptr, &renderer.mainRenderPass));
 }
 
-static void createShadowTarget(const VulkanContext& ctx, ShadowRenderer& renderer)
+static void createShadowTargets(const VulkanContext& ctx, ShadowRenderer& renderer)
 {
-    createAttachmentTexture(ctx, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, SHADOW_DEPTH_FORMAT,
-                            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                            VK_IMAGE_ASPECT_DEPTH_BIT, renderer.shadowMap);
+    const uint32_t size = renderer.shadowMapSize;
 
+    createAttachmentTexture(ctx, size, size, shadowMapColorFormat(renderer.shadowMapBits),
+                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                            VK_IMAGE_ASPECT_COLOR_BIT, renderer.shadowMap);
+    createAttachmentTexture(ctx, size, size, SHADOW_TEST_DEPTH_FORMAT,
+                            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
+                            renderer.shadowDepth);
+
+    VkImageView views[2] = { renderer.shadowMap.view, renderer.shadowDepth.view };
     VkFramebufferCreateInfo framebufferInfo = {};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferInfo.renderPass = renderer.shadowRenderPass;
-    framebufferInfo.attachmentCount = 1;
-    framebufferInfo.pAttachments = &renderer.shadowMap.view;
-    framebufferInfo.width = SHADOW_MAP_SIZE;
-    framebufferInfo.height = SHADOW_MAP_SIZE;
+    framebufferInfo.attachmentCount = 2;
+    framebufferInfo.pAttachments = views;
+    framebufferInfo.width = size;
+    framebufferInfo.height = size;
     framebufferInfo.layers = 1;
     VK_CHECK(vkCreateFramebuffer(ctx.device, &framebufferInfo, nullptr, &renderer.shadowFramebuffer));
-
-    // 比较采样器：贴图范围内的深度小于等于参考值就算受光，范围外按最远深度处理
-    VkSamplerCreateInfo samplerInfo = {};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-    samplerInfo.compareEnable = VK_TRUE;
-    samplerInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-    samplerInfo.maxLod = 0.0f;
-    VK_CHECK(vkCreateSampler(ctx.device, &samplerInfo, nullptr, &renderer.shadowSampler));
 
     // 创建时先转到只读布局：关闭阴影时不跑阴影通道，主通道仍然绑定着这张贴图，
     // 布局必须与描述符里声明的只读布局一致
@@ -162,7 +207,7 @@ static void createShadowTarget(const VulkanContext& ctx, ShadowRenderer& rendere
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = renderer.shadowMap.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.layerCount = 1;
     vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
@@ -170,10 +215,11 @@ static void createShadowTarget(const VulkanContext& ctx, ShadowRenderer& rendere
     endOneTimeCommands(ctx, commandBuffer);
 }
 
-static void destroyShadowTarget(const VulkanContext& ctx, ShadowRenderer& renderer)
+static void destroyShadowTargets(const VulkanContext& ctx, ShadowRenderer& renderer)
 {
-    vkDestroySampler(ctx.device, renderer.shadowSampler, nullptr);
     vkDestroyFramebuffer(ctx.device, renderer.shadowFramebuffer, nullptr);
+    renderer.shadowFramebuffer = VK_NULL_HANDLE;
+    destroyTexture(ctx, renderer.shadowDepth);
     destroyTexture(ctx, renderer.shadowMap);
 }
 
@@ -306,8 +352,13 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.shadowPipelineLayout));
 
     VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/shadow.vert.spv"));
+    VkShaderModule fragmentModule =
+        loadShaderModuleFromMemory(ctx, readAssetBytes("shaders/shadow.frag.spv"));
 
-    VkPipelineShaderStageCreateInfo stage = makeShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vertexModule);
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0] = makeShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vertexModule);
+    // 深度值由片元着色器写进颜色附件，主通道再以采样方式读取
+    stages[1] = makeShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentModule);
 
     VkVertexInputBindingDescription vertexBinding = {};
     VkVertexInputAttributeDescription vertexAttributes[3] = {};
@@ -352,9 +403,14 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
     depthStencil.depthWriteEnable = VK_TRUE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
 
-    // 阴影通道没有颜色附件
+    // 颜色附件只保存深度值，写入 R 通道
+    VkPipelineColorBlendAttachmentState blendAttachment = {};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+
     VkPipelineColorBlendStateCreateInfo colorBlend = {};
     colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlend.attachmentCount = 1;
+    colorBlend.pAttachments = &blendAttachment;
 
     VkDynamicState dynamicStates[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo dynamicState = {};
@@ -364,8 +420,8 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
 
     VkGraphicsPipelineCreateInfo pipelineInfo = {};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = 1;
-    pipelineInfo.pStages = &stage;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
     pipelineInfo.pVertexInputState = &vertexInput;
     pipelineInfo.pInputAssemblyState = &inputAssembly;
     pipelineInfo.pViewportState = &viewportState;
@@ -381,6 +437,7 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
     VK_CHECK(vkCreateGraphicsPipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
                                        &renderer.shadowPipeline));
 
+    vkDestroyShaderModule(ctx.device, fragmentModule, nullptr);
     vkDestroyShaderModule(ctx.device, vertexModule, nullptr);
 }
 
@@ -503,11 +560,13 @@ static void createMeshBuffers(const VulkanContext& ctx, const MeshData& mesh, Gp
 
 void createRenderer(const VulkanContext& ctx, ShadowRenderer& renderer, const MeshData& objectMesh,
                     const MeshData& groundMesh, const std::vector<InstanceData>& instances,
-                    uint32_t groundInstanceIndex)
+                    uint32_t groundInstanceIndex, uint32_t shadowMapSize, uint32_t shadowMapBits)
 {
     renderer = ShadowRenderer();
     renderer.instanceCapacity = static_cast<uint32_t>(instances.size());
     renderer.groundInstanceIndex = groundInstanceIndex;
+    renderer.shadowMapSize = shadowMapSize;
+    renderer.shadowMapBits = shadowMapBits;
 
     // 时间戳查询支持由设备能力决定，桌面与安卓都按同一套规则探测
     uint32_t queueFamilyCount = 0;
@@ -530,9 +589,10 @@ void createRenderer(const VulkanContext& ctx, ShadowRenderer& renderer, const Me
 
     createBackpackMaterialTextures(ctx, renderer.material);
 
+    createShadowSampler(ctx, renderer);
     createShadowRenderPass(ctx, renderer);
     createMainRenderPass(ctx, renderer);
-    createShadowTarget(ctx, renderer);
+    createShadowTargets(ctx, renderer);
     createSwapchainTargets(ctx, renderer);
 
     createDescriptorLayouts(ctx, renderer);
@@ -614,7 +674,8 @@ void destroyRenderer(const VulkanContext& ctx, ShadowRenderer& renderer)
     vkDestroyDescriptorSetLayout(ctx.device, renderer.sceneSetLayout, nullptr);
 
     destroySwapchainTargets(ctx, renderer);
-    destroyShadowTarget(ctx, renderer);
+    destroyShadowTargets(ctx, renderer);
+    vkDestroySampler(ctx.device, renderer.shadowSampler, nullptr);
 
     vkDestroyRenderPass(ctx.device, renderer.mainRenderPass, nullptr);
     vkDestroyRenderPass(ctx.device, renderer.shadowRenderPass, nullptr);
@@ -634,6 +695,33 @@ void recreateSwapchainTargets(const VulkanContext& ctx, ShadowRenderer& renderer
     createSwapchainTargets(ctx, renderer);
 }
 
+// 阴影贴图的分辨率与位数改变时重建阴影通道的全部资源：渲染通道与管线的附件格式跟随位数，
+// 帧缓冲与纹理跟随分辨率，最后把新的贴图视图写回材质描述符的绑定 5
+static void applyShadowMapOptions(const VulkanContext& ctx, ShadowRenderer& renderer, uint32_t size,
+                                  uint32_t bits)
+{
+    if (renderer.shadowMapSize == size && renderer.shadowMapBits == bits) {
+        return;
+    }
+
+    // 旧的贴图与管线可能还被另一帧使用，先等设备空闲再拆
+    VK_CHECK(vkDeviceWaitIdle(ctx.device));
+
+    vkDestroyPipeline(ctx.device, renderer.shadowPipeline, nullptr);
+    vkDestroyPipelineLayout(ctx.device, renderer.shadowPipelineLayout, nullptr);
+    vkDestroyRenderPass(ctx.device, renderer.shadowRenderPass, nullptr);
+    destroyShadowTargets(ctx, renderer);
+
+    renderer.shadowMapSize = size;
+    renderer.shadowMapBits = bits;
+
+    createShadowRenderPass(ctx, renderer);
+    createShadowPipeline(ctx, renderer);
+    createShadowTargets(ctx, renderer);
+
+    writeImageDescriptor(ctx, renderer.materialSet, 5, renderer.shadowMap.view, renderer.shadowSampler);
+}
+
 bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t frameCounter,
                const FrameInput& input, const ShadowSceneUniform& sceneUniform,
                FrameStatistics& outStatistics)
@@ -641,6 +729,8 @@ bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t fram
     ShadowFrameResources& frame = renderer.frames[frameCounter % MAX_FRAMES_IN_FLIGHT];
 
     VK_CHECK(vkWaitForFences(ctx.device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
+
+    applyShadowMapOptions(ctx, renderer, input.shadowMapSize, input.shadowMapBits);
 
     // 上一次使用本组资源的那一帧已经完成，可以读取它的计时
     outStatistics.gpuMilliseconds = 0.0;
@@ -691,26 +781,33 @@ bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t fram
 
     const double shadowPassStart = nowSeconds();
     if (input.shadowsEnabled) {
+        const float shadowMapSize = static_cast<float>(renderer.shadowMapSize);
+
         VkViewport shadowViewport = {};
-        shadowViewport.width = static_cast<float>(SHADOW_MAP_SIZE);
-        shadowViewport.height = static_cast<float>(SHADOW_MAP_SIZE);
+        shadowViewport.width = shadowMapSize;
+        shadowViewport.height = shadowMapSize;
         shadowViewport.maxDepth = 1.0f;
 
         VkRect2D shadowScissor = {};
-        shadowScissor.extent.width = SHADOW_MAP_SIZE;
-        shadowScissor.extent.height = SHADOW_MAP_SIZE;
+        shadowScissor.extent.width = renderer.shadowMapSize;
+        shadowScissor.extent.height = renderer.shadowMapSize;
 
-        VkClearValue shadowClear = {};
-        shadowClear.depthStencil.depth = 1.0f;
+        // 颜色附件的初值取最远深度，落在贴图外的像素由此判定为受光；深度附件同为首帧清成最远
+        VkClearValue shadowClearValues[2] = {};
+        shadowClearValues[0].color.float32[0] = 1.0f;
+        shadowClearValues[0].color.float32[1] = 0.0f;
+        shadowClearValues[0].color.float32[2] = 0.0f;
+        shadowClearValues[0].color.float32[3] = 1.0f;
+        shadowClearValues[1].depthStencil.depth = 1.0f;
 
         VkRenderPassBeginInfo shadowBegin = {};
         shadowBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         shadowBegin.renderPass = renderer.shadowRenderPass;
         shadowBegin.framebuffer = renderer.shadowFramebuffer;
-        shadowBegin.renderArea.extent.width = SHADOW_MAP_SIZE;
-        shadowBegin.renderArea.extent.height = SHADOW_MAP_SIZE;
-        shadowBegin.clearValueCount = 1;
-        shadowBegin.pClearValues = &shadowClear;
+        shadowBegin.renderArea.extent.width = renderer.shadowMapSize;
+        shadowBegin.renderArea.extent.height = renderer.shadowMapSize;
+        shadowBegin.clearValueCount = 2;
+        shadowBegin.pClearValues = shadowClearValues;
 
         vkCmdBeginRenderPass(frame.commandBuffer, &shadowBegin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdSetViewport(frame.commandBuffer, 0, 1, &shadowViewport);
