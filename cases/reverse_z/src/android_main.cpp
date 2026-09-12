@@ -92,7 +92,7 @@ static std::string reverseZReportPrefix(uint32_t objects, uint32_t drawCommands)
 // 距离互换：公共库的 fillCameraMatrices 按 Camera 里的近远平面生成矩阵，交换这两个平面
 // 就得到反向的映射，视图矩阵、世界位置与投影均不受影响
 static void fillSceneUniform(const Camera& camera, float aspectRatio, bool reverseZ, float groundOffset,
-                             SceneUniform& outUniform)
+                             uint32_t viewMode, uint32_t depthFormatOption, SceneUniform& outUniform)
 {
     CameraMatrices matrices;
     if (reverseZ) {
@@ -108,7 +108,8 @@ static void fillSceneUniform(const Camera& camera, float aspectRatio, bool rever
     outUniform.viewProjection = matrices.viewProjection;
     outUniform.cameraPosition = matrices.cameraPosition;
     outUniform.lightDirection = glm::vec4(glm::normalize(glm::vec3(0.42f, 0.78f, 0.46f)), 0.0f);
-    outUniform.groundParams = glm::vec4(groundOffset, 0.0f, 0.0f, 0.0f);
+    outUniform.groundParams = glm::vec4(groundOffset, static_cast<float>(viewMode),
+                                        depthFormatQuantizeLevels(depthFormatOption), reverseZ ? 1.0f : 0.0f);
 }
 
 static void initializeRendererStack(AppState& state, android_app* app)
@@ -134,7 +135,7 @@ static void initializeRendererStack(AppState& state, android_app* app)
     state.instances.insert(state.instances.end(), objectInstances.begin(), objectInstances.end());
 
     createRenderer(state.ctx, state.renderer, state.objectMesh, state.groundMesh, state.instances,
-                   state.objectInstanceOffset, state.uiState.reverseZ);
+                   state.objectInstanceOffset, state.uiState.reverseZ, state.uiState.depthFormatOption);
 
     int caseTextCount = 0;
     const char* const* caseTexts = caseInterfaceTexts(caseTextCount);
@@ -281,11 +282,13 @@ static void drawOneFrame(AppState& state)
 
     SceneUniform sceneUniform;
     fillSceneUniform(state.camera, aspectRatio, state.uiState.reverseZ, state.uiState.groundOffset,
-                     sceneUniform);
+                     state.uiState.viewMode, state.uiState.depthFormatOption, sceneUniform);
 
     FrameInput input = {};
     input.drawUserInterface = true;
     input.reverseZ = state.uiState.reverseZ;
+    input.depthFormatOption = state.uiState.depthFormatOption;
+    input.viewMode = state.uiState.viewMode;
     input.activeObjectCount = static_cast<uint32_t>(state.uiState.activeObjectCount);
 
     FrameStatistics statistics = {};
@@ -378,6 +381,26 @@ static void installControlHandler(AppState& state)
             resetTimingWindows(state.timingStore);
             return "ok";
         }
+        if (verb == "depth-format") {
+            std::string value;
+            if (!(stream >> value) || (value != "d16" && value != "d24" && value != "d32")) {
+                return "err: depth-format takes d16, d24 or d32";
+            }
+            state.uiState.depthFormatOption = value == "d16" ? DEPTH_FORMAT_OPTION_D16
+                                             : value == "d24" ? DEPTH_FORMAT_OPTION_D24
+                                                              : DEPTH_FORMAT_OPTION_D32;
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "depth-view") {
+            long value = 0;
+            if (!(stream >> value) || (value != 0 && value != 1)) {
+                return "err: depth-view takes 0 or 1";
+            }
+            state.uiState.viewMode = value == 1 ? REVERSE_Z_VIEW_DEPTH : REVERSE_Z_VIEW_NORMAL;
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
         if (verb == "begin") {
             state.segmentActive = true;
             state.segmentStartSeconds = nowSeconds();
@@ -420,6 +443,8 @@ void android_main(android_app* app)
     state.uiState.nearPlane = 0.1f;
     state.uiState.farPlane = 20000.0f;
     state.uiState.groundOffset = 0.01f;
+    state.uiState.depthFormatOption = DEPTH_FORMAT_OPTION_D32;
+    state.uiState.viewMode = REVERSE_Z_VIEW_NORMAL;
 
     app->userData = &state;
     app->onAppCmd = handleAppCommand;

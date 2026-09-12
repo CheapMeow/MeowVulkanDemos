@@ -13,6 +13,11 @@ layout(location = 0) out vec4 outColor;
 
 void main()
 {
+    if (scene.groundParams.y > 0.5) {
+        outColor = vec4(depthVisualizationColor(gl_FragCoord.z), 1.0);
+        return;
+    }
+
     vec3 albedo = texture(albedoMap, inUv).rgb;
     vec3 normal = normalize(inWorldNormal);
     float nDotL = max(dot(normal, scene.lightDirection.xyz), 0.0);

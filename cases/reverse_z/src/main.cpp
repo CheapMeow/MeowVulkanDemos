@@ -59,7 +59,7 @@ static void rebuildSwapchainResources(VulkanContext& ctx, ReverseZRenderer& rend
 // 距离互换：公共库的 fillCameraMatrices 按 Camera 里的近远平面生成矩阵，交换这两个平面
 // 就得到反向的映射，视图矩阵、世界位置与投影均不受影响
 static void fillSceneUniform(const Camera& camera, float aspectRatio, bool reverseZ, float groundOffset,
-                             SceneUniform& outUniform)
+                             uint32_t viewMode, uint32_t depthFormatOption, SceneUniform& outUniform)
 {
     CameraMatrices matrices;
     if (reverseZ) {
@@ -75,7 +75,8 @@ static void fillSceneUniform(const Camera& camera, float aspectRatio, bool rever
     outUniform.viewProjection = matrices.viewProjection;
     outUniform.cameraPosition = matrices.cameraPosition;
     outUniform.lightDirection = glm::vec4(glm::normalize(glm::vec3(0.42f, 0.78f, 0.46f)), 0.0f);
-    outUniform.groundParams = glm::vec4(groundOffset, 0.0f, 0.0f, 0.0f);
+    outUniform.groundParams = glm::vec4(groundOffset, static_cast<float>(viewMode),
+                                        depthFormatQuantizeLevels(depthFormatOption), reverseZ ? 1.0f : 0.0f);
 }
 
 int main(int argc, char** argv)
@@ -94,6 +95,8 @@ int main(int argc, char** argv)
     float nearPlane = 0.1f;
     float farPlane = 20000.0f;
     float groundOffset = 0.01f;
+    uint32_t depthFormatOption = DEPTH_FORMAT_OPTION_D32;
+    uint32_t viewMode = REVERSE_Z_VIEW_NORMAL;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--objects") == 0 && i + 1 < argc) {
@@ -123,6 +126,20 @@ int main(int argc, char** argv)
         } else if (std::strcmp(argv[i], "--ground-offset") == 0 && i + 1 < argc) {
             groundOffset = static_cast<float>(std::atof(argv[i + 1]));
             ++i;
+        } else if (std::strcmp(argv[i], "--depth-format") == 0 && i + 1 < argc) {
+            const char* value = argv[i + 1];
+            if (std::strcmp(value, "d16") == 0) {
+                depthFormatOption = DEPTH_FORMAT_OPTION_D16;
+            } else if (std::strcmp(value, "d24") == 0) {
+                depthFormatOption = DEPTH_FORMAT_OPTION_D24;
+            } else if (std::strcmp(value, "d32") == 0) {
+                depthFormatOption = DEPTH_FORMAT_OPTION_D32;
+            } else {
+                FATAL("--depth-format takes d16, d24 or d32");
+            }
+            ++i;
+        } else if (std::strcmp(argv[i], "--depth-view") == 0) {
+            viewMode = REVERSE_Z_VIEW_DEPTH;
         } else if (std::strcmp(argv[i], "--control-port") == 0 && i + 1 < argc) {
             controlPort = static_cast<uint16_t>(std::atoi(argv[i + 1]));
             ++i;
@@ -205,7 +222,8 @@ int main(int argc, char** argv)
     instances.insert(instances.end(), objectInstances.begin(), objectInstances.end());
 
     ReverseZRenderer renderer = {};
-    createRenderer(ctx, renderer, objectMesh, groundMesh, instances, objectInstanceOffset, reverseZ);
+    createRenderer(ctx, renderer, objectMesh, groundMesh, instances, objectInstanceOffset, reverseZ,
+                   depthFormatOption);
 
     UserInterface ui = {};
     int caseTextCount = 0;
@@ -228,6 +246,8 @@ int main(int argc, char** argv)
     uiState.nearPlane = nearPlane;
     uiState.farPlane = farPlane;
     uiState.groundOffset = groundOffset;
+    uiState.depthFormatOption = depthFormatOption;
+    uiState.viewMode = viewMode;
 
     UiStatistics uiStatistics = {};
 
@@ -305,6 +325,26 @@ int main(int argc, char** argv)
                 return "err: ground-offset out of range";
             }
             uiState.groundOffset = static_cast<float>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "depth-format") {
+            std::string value;
+            if (!(stream >> value) || (value != "d16" && value != "d24" && value != "d32")) {
+                return "err: depth-format takes d16, d24 or d32";
+            }
+            uiState.depthFormatOption = value == "d16" ? DEPTH_FORMAT_OPTION_D16
+                                       : value == "d24" ? DEPTH_FORMAT_OPTION_D24
+                                                        : DEPTH_FORMAT_OPTION_D32;
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "depth-view") {
+            long value = 0;
+            if (!(stream >> value) || (value != 0 && value != 1)) {
+                return "err: depth-view takes 0 or 1";
+            }
+            uiState.viewMode = value == 1 ? REVERSE_Z_VIEW_DEPTH : REVERSE_Z_VIEW_NORMAL;
             resetTimingWindows(timingStore);
             return "ok";
         }
@@ -412,7 +452,8 @@ int main(int argc, char** argv)
                                   static_cast<float>(ctx.swapchainExtent.height);
 
         SceneUniform sceneUniform;
-        fillSceneUniform(camera, aspectRatio, uiState.reverseZ, uiState.groundOffset, sceneUniform);
+        fillSceneUniform(camera, aspectRatio, uiState.reverseZ, uiState.groundOffset, uiState.viewMode,
+                         uiState.depthFormatOption, sceneUniform);
 
         const bool shouldExit = autoExitSeconds > 0.0 && currentTime - startTime >= autoExitSeconds;
         const bool shouldCaptureThisFrame = captureRequested && !captureDone && shouldExit;
@@ -424,6 +465,8 @@ int main(int argc, char** argv)
         FrameInput input = {};
         input.drawUserInterface = interfaceEnabled;
         input.reverseZ = uiState.reverseZ;
+        input.depthFormatOption = uiState.depthFormatOption;
+        input.viewMode = uiState.viewMode;
         input.activeObjectCount = static_cast<uint32_t>(uiState.activeObjectCount);
         input.captureBuffer = shouldCaptureThisFrame ? &captureBuffer : nullptr;
 

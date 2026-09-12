@@ -15,6 +15,9 @@ struct UiState {
     float farPlane;
     // 上下两层地面的高度间距，决定远处在哪个距离上开始出现 Z-fighting
     float groundOffset;
+    // 深度附件的格式与视图模式，取值见 renderer.h
+    uint32_t depthFormatOption;
+    uint32_t viewMode;
 };
 
 // 界面上显示的本帧工作量，耗时统计由 TimingStore 提供

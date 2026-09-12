@@ -18,8 +18,28 @@ struct SceneUniform {
     glm::mat4 viewProjection;
     glm::vec4 cameraPosition;
     glm::vec4 lightDirection;  // xyz 指向光源的单位向量
-    glm::vec4 groundParams;    // x 上下两层地面的高度间距, yzw 保留
+    glm::vec4 groundParams;    // x 上下两层地面的高度间距, y 视图模式, z 深度量化档数, w 保留
 };
+
+// 深度附件的可选格式：16 位定点、24 位定点、32 位浮点
+enum DepthFormatOption {
+    DEPTH_FORMAT_OPTION_D16 = 0,
+    DEPTH_FORMAT_OPTION_D24 = 1,
+    DEPTH_FORMAT_OPTION_D32 = 2,
+};
+
+enum { DEPTH_FORMAT_OPTION_COUNT = 3 };
+
+// 界面上的视图模式
+enum ReverseZViewMode {
+    REVERSE_Z_VIEW_NORMAL = 0,
+    REVERSE_Z_VIEW_DEPTH = 1,
+};
+
+// 深度附件的 Vulkan 格式，以及深度可视化时用来量化的档数（浮点格式返回 0，表示不量化）
+VkFormat depthFormatForOption(uint32_t option);
+float depthFormatQuantizeLevels(uint32_t option);
+const char* depthFormatName(uint32_t option);
 
 // 近远裁剪面的取值范围。近裁剪面越小、两者比例越大，标准深度的远处精度越差
 constexpr float NEAR_PLANE_MIN = 0.01f;
@@ -78,6 +98,9 @@ struct ReverseZRenderer {
 
     // 当前管线采用的深度模式，与界面上的开关不一致时重建管线
     bool reverseZ;
+    // 当前深度附件的格式，改动时重建渲染通道、深度附件、帧缓冲与管线
+    VkFormat depthFormat;
+    uint32_t depthFormatOption;
 
     float timestampPeriodNanoseconds;
     bool timestampsSupported;
@@ -89,6 +112,9 @@ struct ReverseZRenderer {
 struct FrameInput {
     bool drawUserInterface;
     bool reverseZ;
+    // 深度附件的格式与视图模式
+    uint32_t depthFormatOption;
+    uint32_t viewMode;
     // 参与绘制的物体数量，两层地面始终绘制
     uint32_t activeObjectCount;
     // 非空时把本帧结果拷回该缓冲
@@ -108,7 +134,7 @@ struct FrameStatistics {
 
 void createRenderer(const VulkanContext& ctx, ReverseZRenderer& renderer, const MeshData& objectMesh,
                     const MeshData& groundMesh, const std::vector<InstanceData>& instances,
-                    uint32_t objectInstanceOffset, bool reverseZ);
+                    uint32_t objectInstanceOffset, bool reverseZ, uint32_t depthFormatOption);
 void destroyRenderer(const VulkanContext& ctx, ReverseZRenderer& renderer);
 
 // 交换链重建之后调用。深度附件与呈现用的帧缓冲跟随交换链尺寸

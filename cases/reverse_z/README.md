@@ -26,7 +26,7 @@ d = near * (far - z) / (z * (far - near))
 
 `z` 增大时 `d` 趋近 0，远处的深度值落在浮点数的极小量级上，相邻可表示值的绝对间隔随之缩小，相对精度在整个深度范围上保持一致。同一对表面在标准映射下相差 0.02 个最低位，在 Reverse-Z 下可能相差几千个最低位。
 
-这个做法要求深度附件是浮点格式，本 case 用 `D32_SFLOAT`。定点格式（`D24_UNORM` 等）的精度沿整个深度范围均匀分布，换不换映射方向都一样。
+这个做法要求深度附件是浮点格式，界面上的"深度附件格式"可以在 `D16_UNORM`、`D24_UNORM_S8` 与 `D32_SFLOAT` 之间切换。定点格式的精度沿整个深度范围均匀分布，换不换映射方向都一样：实测 `D16_UNORM` 下切换 Reverse-Z 只有 1.4% 的像素变化，`D32_SFLOAT` 下有 13.5%。
 
 深度判定方向必须跟着换：标准映射下越近的值越小，用 `VK_COMPARE_OP_LESS`；Reverse-Z 下越近的值越大，用 `VK_COMPARE_OP_GREATER`。深度清除值同理，标准映射清成 1，Reverse-Z 清成 0。
 
@@ -61,7 +61,7 @@ graph LR
 
 ### 管线重建的边界
 
-深度判定方向是管线状态，改动后必须重建管线；投影矩阵是 uniform，逐帧写入，不需要重建任何资源。重建前先等设备空闲，避免拆掉还在被上一帧使用的管线。深度清除值逐帧写入 `VkClearValue`，跟随当前模式。
+深度判定方向是管线状态，改动后必须重建管线；投影矩阵是 uniform，逐帧写入，不需要重建任何资源。深度附件格式还会改变渲染通道的附件格式，改动后连渲染通道、深度附件、帧缓冲与管线一起重建。重建前先等设备空闲，避免拆掉还在被上一帧使用的资源。深度清除值逐帧写入 `VkClearValue`，跟随当前模式。
 
 ### 棋盘格的格子尺寸
 
@@ -81,6 +81,8 @@ graph LR
 | 近裁剪面 | 近平面距离，取值 0.01 到 1 |
 | 远裁剪面 | 远平面距离，取值 500 到 200000 |
 | 地面高度间距 | 上下两层地面的高度差，取值 0.001 到 0.2 |
+| 深度附件格式 | `D16_UNORM`、`D24_UNORM_S8`、`D32_SFLOAT`，改动后重建渲染通道、深度附件、帧缓冲与管线 |
+| 视图 | 正常画面或深度可视化 |
 | GPU 锁频 | 与间接绘制 case 共用同一个面板 |
 
 面板同时显示绘制命令条数与当前深度模式，另附操作指南；耗时面板按本 case 的通道拆分逐项列出。
@@ -97,6 +99,8 @@ graph LR
 | `--near F` | 近裁剪面距离 | 0.1 |
 | `--far F` | 远裁剪面距离 | 20000 |
 | `--ground-offset F` | 上下两层地面的高度间距 | 0.01 |
+| `--depth-format 名字` | 深度附件格式，取 `d16`、`d24` 或 `d32` | d32 |
+| `--depth-view` | 启动时切到深度可视化视图 | 正常画面 |
 | `--no-interface` | 不显示界面面板 | 显示 |
 | `--auto-exit S` | 运行 S 秒后自动退出 | 关闭 |
 | `--capture 文件名` | 退出前把画面写成 PNG 并打印像素统计 | 关闭 |
@@ -134,13 +138,30 @@ build\meow_reverse_z.exe --auto-exit 3 --no-interface --near 0.5 --capture inter
 
 每一档再配一张开 Reverse-Z 的抓帧，按同样的方法统计，近裁剪面 0.02、0.1、0.5 三档下选错表面的地面像素比例分别是 51.31%、21.62%、3.56%，与"近裁剪面越小、远处精度越差"一致；三档下开启 Reverse-Z 之后都归零。
 
+三种深度附件格式与两种视图也可以抓帧对比：
+
+```
+build\meow_reverse_z.exe --auto-exit 3 --no-interface --capture intermediate\rz_d16.png --depth-format d16
+build\meow_reverse_z.exe --auto-exit 3 --no-interface --capture intermediate\rz_d16rev.png --depth-format d16 --reverse-z
+build\meow_reverse_z.exe --auto-exit 3 --no-interface --capture intermediate\rz_view_d16.png --depth-view --depth-format d16
+build\meow_reverse_z.exe --auto-exit 3 --no-interface --capture intermediate\rz_view_d32.png --depth-view --depth-format d32
+```
+
+| 对比 | 差异像素占比 |
+| --- | --- |
+| D16 标准与反向 | 1.37% |
+| D32 标准与反向 | 13.46% |
+| D16 与 D32 的深度可视化 | 0.43% |
+
+定点格式下换映射方向几乎没有变化，浮点格式下变化明显；深度可视化里 D16 与 D32 的差别就是量化台阶的疏密。深度可视化画的是窗口深度到远平面的距离、按当前格式档数量化之后再开十六次方根的结果：这台相机看向两万单位远，可见范围内的深度值几乎全部挤在远平面附近，不开方根画出来是一整片饱和色。
+
 运行中切换模式与参数用 TCP 控制服务：
 
 ```
 build\meow_reverse_z.exe --control-port 21000
 ```
 
-连接后逐行发命令：`reverse-z 1`/`reverse-z 0` 切换深度模式，`near`/`far`/`ground-offset`/`objects` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
+连接后逐行发命令：`reverse-z 1`/`reverse-z 0` 切换深度模式，`depth-format d16|d24|d32` 切换深度附件格式，`depth-view 1|0` 切换视图，`near`/`far`/`ground-offset`/`objects` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
 
 ## 源码结构
 

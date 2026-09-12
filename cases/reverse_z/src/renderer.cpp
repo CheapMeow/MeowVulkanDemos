@@ -9,9 +9,41 @@
 #include <cstring>
 #include <vector>
 
-// 深度附件必须是浮点格式。Reverse-Z 依赖浮点深度在靠近 0 的一侧仍有足够的相对精度，
+// 深度附件可选三种格式。Reverse-Z 依赖浮点深度在靠近 0 的一侧仍有足够的相对精度，
 // 定点格式的精度沿整个深度范围均匀分布，换不换方向都一样
-static const VkFormat MAIN_DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
+VkFormat depthFormatForOption(uint32_t option)
+{
+    if (option == DEPTH_FORMAT_OPTION_D16) {
+        return VK_FORMAT_D16_UNORM;
+    }
+    if (option == DEPTH_FORMAT_OPTION_D24) {
+        return VK_FORMAT_D24_UNORM_S8_UINT;
+    }
+    return VK_FORMAT_D32_SFLOAT;
+}
+
+float depthFormatQuantizeLevels(uint32_t option)
+{
+    if (option == DEPTH_FORMAT_OPTION_D16) {
+        return 65535.0f;
+    }
+    if (option == DEPTH_FORMAT_OPTION_D24) {
+        return 16777215.0f;
+    }
+    // 浮点格式不做量化
+    return 0.0f;
+}
+
+const char* depthFormatName(uint32_t option)
+{
+    if (option == DEPTH_FORMAT_OPTION_D16) {
+        return "D16_UNORM";
+    }
+    if (option == DEPTH_FORMAT_OPTION_D24) {
+        return "D24_UNORM_S8";
+    }
+    return "D32_SFLOAT";
+}
 
 // 标准深度把近平面映射到 0、远平面映射到 1，越近的值越容易通过，判定用小于；
 // Reverse-Z 把近平面映射到 1、远平面映射到 0，越近的值越大，判定改用大于
@@ -39,7 +71,7 @@ static void createRenderPass(const VulkanContext& ctx, ReverseZRenderer& rendere
     attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-    attachments[1].format = MAIN_DEPTH_FORMAT;
+    attachments[1].format = renderer.depthFormat;
     attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -86,7 +118,7 @@ static void createRenderPass(const VulkanContext& ctx, ReverseZRenderer& rendere
 
 static void createSwapchainTargets(const VulkanContext& ctx, ReverseZRenderer& renderer)
 {
-    createAttachmentTexture(ctx, ctx.swapchainExtent.width, ctx.swapchainExtent.height, MAIN_DEPTH_FORMAT,
+    createAttachmentTexture(ctx, ctx.swapchainExtent.width, ctx.swapchainExtent.height, renderer.depthFormat,
                             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
                             renderer.depthTexture);
 
@@ -331,10 +363,12 @@ static void createMeshBuffers(const VulkanContext& ctx, const MeshData& mesh, Gp
 
 void createRenderer(const VulkanContext& ctx, ReverseZRenderer& renderer, const MeshData& objectMesh,
                     const MeshData& groundMesh, const std::vector<InstanceData>& instances,
-                    uint32_t objectInstanceOffset, bool reverseZ)
+                    uint32_t objectInstanceOffset, bool reverseZ, uint32_t depthFormatOption)
 {
     renderer = ReverseZRenderer();
     renderer.reverseZ = reverseZ;
+    renderer.depthFormatOption = depthFormatOption;
+    renderer.depthFormat = depthFormatForOption(depthFormatOption);
     renderer.groundInstanceCount = GROUND_LAYER_COUNT;
     renderer.objectInstanceOffset = objectInstanceOffset;
     renderer.objectCapacity = static_cast<uint32_t>(instances.size()) - objectInstanceOffset;
@@ -450,10 +484,14 @@ void recreateSwapchainTargets(const VulkanContext& ctx, ReverseZRenderer& render
     createSwapchainTargets(ctx, renderer);
 }
 
-// 深度模式切换后重建两条管线。旧的管线可能还被另一帧使用，先等设备空闲再拆
-static void applyDepthMode(const VulkanContext& ctx, ReverseZRenderer& renderer, bool reverseZ)
+// 深度模式或深度附件格式切换后重建受影响的资源。深度判定方向只影响管线，改动后重建管线；
+// 深度附件格式还会改变渲染通道的附件格式，改动后连渲染通道、深度附件与帧缓冲一起重建。
+// 旧的资源可能还被另一帧使用，先等设备空闲再拆
+static void applyRendererOptions(const VulkanContext& ctx, ReverseZRenderer& renderer, const FrameInput& input)
 {
-    if (renderer.reverseZ == reverseZ) {
+    const bool formatChanged = renderer.depthFormatOption != input.depthFormatOption;
+    const bool pipeChanged = renderer.reverseZ != input.reverseZ;
+    if (!formatChanged && !pipeChanged) {
         return;
     }
 
@@ -463,7 +501,19 @@ static void applyDepthMode(const VulkanContext& ctx, ReverseZRenderer& renderer,
     vkDestroyPipeline(ctx.device, renderer.groundPipeline, nullptr);
     vkDestroyPipelineLayout(ctx.device, renderer.pipelineLayout, nullptr);
 
-    renderer.reverseZ = reverseZ;
+    renderer.reverseZ = input.reverseZ;
+
+    if (formatChanged) {
+        destroySwapchainTargets(ctx, renderer);
+        vkDestroyRenderPass(ctx.device, renderer.renderPass, nullptr);
+
+        renderer.depthFormatOption = input.depthFormatOption;
+        renderer.depthFormat = depthFormatForOption(input.depthFormatOption);
+
+        createRenderPass(ctx, renderer);
+        createSwapchainTargets(ctx, renderer);
+    }
+
     createMainPipelines(ctx, renderer);
 }
 
@@ -474,7 +524,7 @@ bool drawFrame(const VulkanContext& ctx, ReverseZRenderer& renderer, uint64_t fr
 
     VK_CHECK(vkWaitForFences(ctx.device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
 
-    applyDepthMode(ctx, renderer, input.reverseZ);
+    applyRendererOptions(ctx, renderer, input);
 
     // 上一次使用本组资源的那一帧已经完成，可以读取它的计时
     outStatistics.gpuMilliseconds = 0.0;

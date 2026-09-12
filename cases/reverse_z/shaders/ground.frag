@@ -17,6 +17,11 @@ const vec3 UPPER_LIGHT = vec3(0.90, 0.45, 0.08);
 
 void main()
 {
+    if (scene.groundParams.y > 0.5) {
+        outColor = vec4(depthVisualizationColor(gl_FragCoord.z), 1.0);
+        return;
+    }
+
     // 棋盘格的格子尺寸随距离放大，远处格子保持在相近的屏幕尺寸，避免棋盘格自己产生走样
     float viewDistance = max(length(inWorldPosition.xz), 1.0);
     float cellSize = viewDistance * 0.06;
