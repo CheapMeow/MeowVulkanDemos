@@ -384,14 +384,12 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
     VkPipelineRasterizationStateCreateInfo rasterization = {};
     rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-    // 只写入背面深度，让主通道里的受光表面处在阴影贴图深度之前，减少自阴影条纹
-    rasterization.cullMode = VK_CULL_MODE_FRONT_BIT;
+    // 只写入背面时，主通道里的受光表面稳定处在阴影贴图深度之前，用物体厚度换来深度余量
+    rasterization.cullMode = renderer.shadowBackFaceDepth ? VK_CULL_MODE_FRONT_BIT : VK_CULL_MODE_BACK_BIT;
     rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterization.lineWidth = 1.0f;
-    // 进一步把写入的深度推远一点，抵消光栅化带来的深度误差
-    rasterization.depthBiasEnable = VK_TRUE;
-    rasterization.depthBiasConstantFactor = 1.5f;
-    rasterization.depthBiasSlopeFactor = 2.0f;
+    // 贴图里的深度由片元着色器写进颜色附件，光栅化的深度偏移只作用在深度测试上，
+    // 影响不到写入值，因此这里不启用
 
     VkPipelineMultisampleStateCreateInfo multisample = {};
     multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -560,13 +558,14 @@ static void createMeshBuffers(const VulkanContext& ctx, const MeshData& mesh, Gp
 
 void createRenderer(const VulkanContext& ctx, ShadowRenderer& renderer, const MeshData& objectMesh,
                     const MeshData& groundMesh, const std::vector<InstanceData>& instances,
-                    uint32_t groundInstanceIndex, uint32_t shadowMapSize, uint32_t shadowMapBits)
+                    uint32_t groundInstanceIndex, const ShadowOptions& shadowOptions)
 {
     renderer = ShadowRenderer();
     renderer.instanceCapacity = static_cast<uint32_t>(instances.size());
     renderer.groundInstanceIndex = groundInstanceIndex;
-    renderer.shadowMapSize = shadowMapSize;
-    renderer.shadowMapBits = shadowMapBits;
+    renderer.shadowMapSize = shadowOptions.mapSize;
+    renderer.shadowMapBits = shadowOptions.mapBits;
+    renderer.shadowBackFaceDepth = shadowOptions.backFaceDepth;
 
     // 时间戳查询支持由设备能力决定，桌面与安卓都按同一套规则探测
     uint32_t queueFamilyCount = 0;
@@ -695,12 +694,14 @@ void recreateSwapchainTargets(const VulkanContext& ctx, ShadowRenderer& renderer
     createSwapchainTargets(ctx, renderer);
 }
 
-// 阴影贴图的分辨率与位数改变时重建阴影通道的全部资源：渲染通道与管线的附件格式跟随位数，
-// 帧缓冲与纹理跟随分辨率，最后把新的贴图视图写回材质描述符的绑定 5
-static void applyShadowMapOptions(const VulkanContext& ctx, ShadowRenderer& renderer, uint32_t size,
-                                  uint32_t bits)
+// 阴影配置改变时重建相应资源：尺寸与位数决定渲染通道的附件格式、帧缓冲与纹理，
+// 只写背面深度决定阴影管线的剔除面，最后把新的贴图视图写回材质描述符的绑定 5
+static void applyShadowOptions(const VulkanContext& ctx, ShadowRenderer& renderer, const ShadowOptions& options)
 {
-    if (renderer.shadowMapSize == size && renderer.shadowMapBits == bits) {
+    const bool targetsChanged = renderer.shadowMapSize != options.mapSize ||
+                                renderer.shadowMapBits != options.mapBits;
+    const bool pipelineChanged = renderer.shadowBackFaceDepth != options.backFaceDepth;
+    if (!targetsChanged && !pipelineChanged) {
         return;
     }
 
@@ -709,17 +710,21 @@ static void applyShadowMapOptions(const VulkanContext& ctx, ShadowRenderer& rend
 
     vkDestroyPipeline(ctx.device, renderer.shadowPipeline, nullptr);
     vkDestroyPipelineLayout(ctx.device, renderer.shadowPipelineLayout, nullptr);
-    vkDestroyRenderPass(ctx.device, renderer.shadowRenderPass, nullptr);
-    destroyShadowTargets(ctx, renderer);
 
-    renderer.shadowMapSize = size;
-    renderer.shadowMapBits = bits;
+    if (targetsChanged) {
+        vkDestroyRenderPass(ctx.device, renderer.shadowRenderPass, nullptr);
+        destroyShadowTargets(ctx, renderer);
 
-    createShadowRenderPass(ctx, renderer);
+        renderer.shadowMapSize = options.mapSize;
+        renderer.shadowMapBits = options.mapBits;
+
+        createShadowRenderPass(ctx, renderer);
+        createShadowTargets(ctx, renderer);
+        writeImageDescriptor(ctx, renderer.materialSet, 5, renderer.shadowMap.view, renderer.shadowSampler);
+    }
+
+    renderer.shadowBackFaceDepth = options.backFaceDepth;
     createShadowPipeline(ctx, renderer);
-    createShadowTargets(ctx, renderer);
-
-    writeImageDescriptor(ctx, renderer.materialSet, 5, renderer.shadowMap.view, renderer.shadowSampler);
 }
 
 bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t frameCounter,
@@ -730,7 +735,7 @@ bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t fram
 
     VK_CHECK(vkWaitForFences(ctx.device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
 
-    applyShadowMapOptions(ctx, renderer, input.shadowMapSize, input.shadowMapBits);
+    applyShadowOptions(ctx, renderer, input.shadow);
 
     // 上一次使用本组资源的那一帧已经完成，可以读取它的计时
     outStatistics.gpuMilliseconds = 0.0;

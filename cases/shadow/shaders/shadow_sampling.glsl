@@ -17,8 +17,8 @@ float sampleShadow(vec3 worldPosition, vec3 normal, float nDotL)
         return 1.0;
     }
 
-    // 沿法线方向抬升采样位置，减少自阴影产生的条纹
-    vec3 liftedPosition = worldPosition + normal * scene.shadowParams.x * 2.0;
+    // 沿法线方向抬升采样位置，抬升距离是世界空间里一个阴影贴图纹素的宽度；开关关闭时不抬升
+    vec3 liftedPosition = worldPosition + normal * (scene.shadowOptions.z * scene.shadowOptions.x);
     bool inside = false;
     vec3 projected = shadowProjection(liftedPosition, inside);
     if (!inside) {
@@ -26,8 +26,11 @@ float sampleShadow(vec3 worldPosition, vec3 normal, float nDotL)
         return 1.0;
     }
 
-    // 掠射角下深度误差更大，偏移随入射角增大
-    float bias = max(scene.shadowParams.x * (1.0 - nDotL), scene.shadowParams.x);
+    // 掠射角下深度误差更大，开关打开时偏移随入射角增大
+    float bias = scene.shadowParams.x;
+    if (scene.shadowOptions.y > 0.5) {
+        bias = max(bias * (1.0 - nDotL), bias);
+    }
     float referenceDepth = projected.z - bias;
     float radius = scene.shadowParams.z;
 

@@ -13,9 +13,14 @@ struct UiState {
     float lightPitchDegrees;
     bool shadowsEnabled;
     bool pcfEnabled;
-    // 阴影贴图的分辨率与保存深度值的位数，改动后渲染器会重建阴影贴图相关资源
+    // 阴影贴图的分辨率与保存深度值的位数，改动后渲染器会重建阴影资源
     uint32_t shadowMapSize;
     uint32_t shadowMapBits;
+    // 瑕疵处理的三项措施与基础深度偏移，关闭或调零都能观察对应的阴影瑕疵
+    bool shadowBackFaceDepth;
+    bool shadowNormalLift;
+    bool shadowSlopeBias;
+    float shadowDepthOffset;
 };
 
 // 界面上显示的本帧工作量，耗时统计由 TimingStore 提供

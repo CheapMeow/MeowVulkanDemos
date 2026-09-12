@@ -20,6 +20,10 @@ enum {
 // 8 位用 R8_UNORM、16 位用 R16_UNORM、32 位用 R32_SFLOAT
 VkFormat shadowMapColorFormat(uint32_t bits);
 
+// 基础深度偏移，单位是光源正交投影下归一化后的深度；界面上可调，调到零就能看到自阴影条纹
+constexpr float SHADOW_DEPTH_OFFSET_DEFAULT = 0.0005f;
+constexpr float SHADOW_DEPTH_OFFSET_MAX = 0.004f;
+
 // 与着色器中的 SceneBuffer 逐字节对应
 struct ShadowSceneUniform {
     glm::mat4 view;
@@ -29,7 +33,16 @@ struct ShadowSceneUniform {
     glm::vec4 cameraPosition;
     glm::vec4 lightDirection;  // xyz 指向光源的单位向量
     glm::vec4 lightColor;      // rgb 颜色, a 强度
-    glm::vec4 shadowParams;    // x 深度偏移, y 阴影贴图纹素大小, z PCF 半径, w 阴影开关
+    glm::vec4 shadowParams;    // x 基础深度偏移, y 阴影贴图纹素大小, z PCF 半径, w 阴影开关
+    glm::vec4 shadowOptions;   // x 法线抬升开关, y 角度偏移开关, z 法线抬升距离（世界单位）, w 保留
+};
+
+// 阴影贴图与瑕疵处理的可调配置。尺寸、位数与只写背面深度发生变化时重建阴影资源，
+// 着色器侧的法线抬升与角度偏移只改 uniform
+struct ShadowOptions {
+    uint32_t mapSize;
+    uint32_t mapBits;
+    bool backFaceDepth;  // 阴影通道只写入背面，用物体厚度换来深度余量
 };
 
 struct ShadowFrameResources {
@@ -68,6 +81,7 @@ struct ShadowRenderer {
     VkFramebuffer shadowFramebuffer;
     uint32_t shadowMapSize;
     uint32_t shadowMapBits;
+    bool shadowBackFaceDepth;
     // 主通道的深度附件，跟随交换链尺寸
     GpuTexture depthTexture;
 
@@ -101,9 +115,8 @@ struct FrameInput {
     bool drawUserInterface;
     bool shadowsEnabled;
     float pcfRadius;
-    // 阴影贴图的分辨率与深度值位数，与渲染器当前配置不同时在这一帧开始处重建相关资源
-    uint32_t shadowMapSize;
-    uint32_t shadowMapBits;
+    // 阴影配置，与渲染器当前配置不同时在这一帧开始处重建相关资源
+    ShadowOptions shadow;
     // 非空时把本帧结果拷回该缓冲
     const GpuBuffer* captureBuffer;
 };
@@ -122,7 +135,7 @@ struct FrameStatistics {
 
 void createRenderer(const VulkanContext& ctx, ShadowRenderer& renderer, const MeshData& objectMesh,
                     const MeshData& groundMesh, const std::vector<InstanceData>& instances,
-                    uint32_t groundInstanceIndex, uint32_t shadowMapSize, uint32_t shadowMapBits);
+                    uint32_t groundInstanceIndex, const ShadowOptions& shadowOptions);
 void destroyRenderer(const VulkanContext& ctx, ShadowRenderer& renderer);
 
 // 交换链重建之后调用。主通道的深度附件与呈现用的帧缓冲跟随交换链尺寸，
@@ -130,7 +143,7 @@ void destroyRenderer(const VulkanContext& ctx, ShadowRenderer& renderer);
 void recreateSwapchainTargets(const VulkanContext& ctx, ShadowRenderer& renderer);
 
 // 返回 false 表示交换链已经失效，这一帧没有绘制任何内容，调用方重建交换链后再画下一帧。
-// FrameInput 里的阴影贴图尺寸与位数发生变化时，函数在本帧开头重建阴影贴图、渲染通道与管线
+// FrameInput 里的阴影配置发生变化时，函数在本帧开头重建阴影贴图、渲染通道与管线
 bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t frameCounter,
                const FrameInput& input, const ShadowSceneUniform& sceneUniform,
                FrameStatistics& outStatistics);

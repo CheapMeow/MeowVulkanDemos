@@ -1,5 +1,6 @@
 #include "case_ui.h"
 
+#include "renderer.h"
 #include "timing_items.h"
 #include "user_interface.h"
 
@@ -57,7 +58,17 @@ static int shadowMapBitsIndex(uint32_t bits)
 static const char* const TEXT_SECTION_WORKLOAD = "本帧工作量";
 static const char* const TEXT_DRAW_COMMANDS = "绘制命令 %u 条";
 static const char* const TEXT_SHADOW_MAP =
-    "当前贴图 %u × %u，每纹素 %u 位深度，深度偏移与纹素大小由光源正交投影决定";
+    "当前贴图 %u × %u，每纹素 %u 位深度，纹素大小由分辨率与光源正交投影共同决定";
+
+static const char* const TEXT_SECTION_ARTIFACTS = "阴影瑕疵处理";
+static const char* const TEXT_BACK_FACE_DEPTH = "只写背面深度";
+static const char* const TEXT_NORMAL_LIFT = "法线抬升采样点";
+static const char* const TEXT_SLOPE_BIAS = "掠射角放大偏移";
+static const char* const TEXT_DEPTH_OFFSET = "基础深度偏移";
+static const char* const TEXT_ARTIFACT_HINT =
+    "三项可以逐项关闭，基础深度偏移可以拉到零。只关掉其中某一项时另外几项仍在兜底，变化不大；"
+    "把只写背面深度关掉、再把基础深度偏移拉到零，自阴影条纹会立刻爬满受光表面。把基础深度偏移"
+    "调得过大，物体与地面相接处的阴影会脱开，出现漏光。";
 
 static const char* const TEXT_SECTION_GUIDE = "操作指南";
 static const char* const TEXT_GUIDE_MOVE = "W A S D 前后左右移动，Q 下降，E 上升";
@@ -69,7 +80,7 @@ static const char* const TEXT_EXPLANATION =
     "阴影通道从光源方向把背面深度写进一张贴图，主通道把像素投影到同一张贴图上做深度比较。"
     "关掉阴影后地面与物体的明暗不再被遮挡关系影响，打开 PCF 则改为在 3×3 范围内多次比较，"
     "阴影边缘从硬边变成渐变。降低分辨率会让阴影边界变粗糙，降低深度值位数会让深度比较的"
-    "档位变少，自阴影条纹随之加重。";
+    "档位变少，阴影边界随之出现台阶。";
 
 static const char* const CASE_INTERFACE_TEXTS[] = {
     TEXT_PANEL_TITLE,          TEXT_SECTION_SCENE,        TEXT_INSTANCE_COUNT,
@@ -78,7 +89,9 @@ static const char* const CASE_INTERFACE_TEXTS[] = {
     TEXT_SECTION_SHADOW_MAP,   TEXT_SHADOW_MAP_SIZE,      TEXT_SHADOW_MAP_BITS,
     SHADOW_MAP_SIZE_LABELS[0], SHADOW_MAP_SIZE_LABELS[1], SHADOW_MAP_SIZE_LABELS[2],
     SHADOW_MAP_SIZE_LABELS[3], SHADOW_MAP_BITS_LABELS[0], SHADOW_MAP_BITS_LABELS[1],
-    SHADOW_MAP_BITS_LABELS[2], TEXT_SECTION_WORKLOAD,     TEXT_DRAW_COMMANDS,
+    SHADOW_MAP_BITS_LABELS[2], TEXT_SECTION_ARTIFACTS,     TEXT_BACK_FACE_DEPTH,
+    TEXT_NORMAL_LIFT,          TEXT_SLOPE_BIAS,           TEXT_DEPTH_OFFSET,
+    TEXT_ARTIFACT_HINT,        TEXT_SECTION_WORKLOAD,     TEXT_DRAW_COMMANDS,
     TEXT_SHADOW_MAP,           TEXT_SECTION_GUIDE,        TEXT_GUIDE_MOVE,
     TEXT_GUIDE_LOOK,           TEXT_GUIDE_QUIT,           TEXT_GUIDE_DRAG,
     TEXT_EXPLANATION,
@@ -108,7 +121,7 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
                         GpuClockMonitor& gpuClockMonitor)
 {
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(500.0f, 820.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(500.0f, 940.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin(TEXT_PANEL_TITLE);
 
     ImGui::SeparatorText(TEXT_SECTION_SCENE);
@@ -131,6 +144,13 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
     if (ImGui::Combo(TEXT_SHADOW_MAP_BITS, &bitsIndex, SHADOW_MAP_BITS_LABELS, SHADOW_MAP_BITS_VALUE_COUNT)) {
         state.shadowMapBits = SHADOW_MAP_BITS_VALUES[bitsIndex];
     }
+
+    ImGui::SeparatorText(TEXT_SECTION_ARTIFACTS);
+    ImGui::Checkbox(TEXT_BACK_FACE_DEPTH, &state.shadowBackFaceDepth);
+    ImGui::Checkbox(TEXT_NORMAL_LIFT, &state.shadowNormalLift);
+    ImGui::Checkbox(TEXT_SLOPE_BIAS, &state.shadowSlopeBias);
+    ImGui::SliderFloat(TEXT_DEPTH_OFFSET, &state.shadowDepthOffset, 0.0f, SHADOW_DEPTH_OFFSET_MAX, "%.4f");
+    ImGui::TextWrapped(TEXT_ARTIFACT_HINT);
 
     buildGpuClockPanel(gpuClockLockState, gpuClockMonitor);
     buildTimingPanel(timing);

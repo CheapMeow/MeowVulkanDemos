@@ -56,8 +56,9 @@ static void rebuildSwapchainResources(VulkanContext& ctx, ShadowRenderer& render
 
 // 由光源的两个角度与场景半径构造光源的正交投影
 static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm::vec3& lightDirection,
-                              float sceneRadius, uint32_t shadowMapSize, bool shadowsEnabled,
-                              bool pcfEnabled, ShadowSceneUniform& outUniform)
+                              float sceneRadius, const ShadowOptions& shadowOptions, float depthOffset,
+                              bool shadowsEnabled, bool pcfEnabled, bool normalLift, bool slopeBias,
+                              ShadowSceneUniform& outUniform)
 {
     CameraMatrices matrices;
     fillCameraMatrices(camera, aspectRatio, matrices);
@@ -77,8 +78,11 @@ static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm
 
     outUniform.lightDirection = glm::vec4(lightDirection, 0.0f);
     outUniform.lightColor = glm::vec4(1.0f, 0.96f, 0.9f, 3.0f);
-    outUniform.shadowParams = glm::vec4(0.0005f, 1.0f / static_cast<float>(shadowMapSize),
+    outUniform.shadowParams = glm::vec4(depthOffset, 1.0f / static_cast<float>(shadowOptions.mapSize),
                                         pcfEnabled ? 1.0f : 0.0f, shadowsEnabled ? 1.0f : 0.0f);
+    // 法线抬升的距离取世界空间里一个阴影贴图纹素的宽度
+    const float liftDistance = 2.0f * radius / static_cast<float>(shadowOptions.mapSize);
+    outUniform.shadowOptions = glm::vec4(normalLift ? 1.0f : 0.0f, slopeBias ? 1.0f : 0.0f, liftDistance, 0.0f);
 }
 
 int main(int argc, char** argv)
@@ -99,6 +103,10 @@ int main(int argc, char** argv)
     bool pcfEnabled = true;
     uint32_t shadowMapSize = SHADOW_MAP_DEFAULT_SIZE;
     uint32_t shadowMapBits = SHADOW_MAP_DEFAULT_BITS;
+    bool backFaceDepth = true;
+    bool normalLift = true;
+    bool slopeBias = true;
+    float shadowDepthOffset = SHADOW_DEPTH_OFFSET_DEFAULT;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--instances") == 0 && i + 1 < argc) {
@@ -127,6 +135,15 @@ int main(int argc, char** argv)
         } else if (std::strcmp(argv[i], "--shadow-bits") == 0 && i + 1 < argc) {
             shadowMapBits = static_cast<uint32_t>(std::atoi(argv[i + 1]));
             ++i;
+        } else if (std::strcmp(argv[i], "--no-back-face-depth") == 0) {
+            backFaceDepth = false;
+        } else if (std::strcmp(argv[i], "--no-normal-lift") == 0) {
+            normalLift = false;
+        } else if (std::strcmp(argv[i], "--no-slope-bias") == 0) {
+            slopeBias = false;
+        } else if (std::strcmp(argv[i], "--depth-offset") == 0 && i + 1 < argc) {
+            shadowDepthOffset = static_cast<float>(std::atof(argv[i + 1]));
+            ++i;
         } else if (std::strcmp(argv[i], "--light-yaw") == 0 && i + 1 < argc) {
             lightYawDegrees = static_cast<float>(std::atof(argv[i + 1]));
             ++i;
@@ -150,6 +167,9 @@ int main(int argc, char** argv)
     }
     if (shadowMapBits != 8 && shadowMapBits != 16 && shadowMapBits != 32) {
         FATAL("--shadow-bits takes 8, 16 or 32");
+    }
+    if (shadowDepthOffset < 0.0f || shadowDepthOffset > SHADOW_DEPTH_OFFSET_MAX) {
+        FATAL("--depth-offset must be between 0 and %f", static_cast<double>(SHADOW_DEPTH_OFFSET_MAX));
     }
 
     // 与 Vulkan、窗口无关，尽早探测，探测不到就在面板里如实显示，不阻止程序继续运行
@@ -212,9 +232,13 @@ int main(int argc, char** argv)
     groundInstance.rotation = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
     instances.push_back(groundInstance);
 
+    ShadowOptions shadowOptions = {};
+    shadowOptions.mapSize = shadowMapSize;
+    shadowOptions.mapBits = shadowMapBits;
+    shadowOptions.backFaceDepth = backFaceDepth;
+
     ShadowRenderer renderer = {};
-    createRenderer(ctx, renderer, objectMesh, groundMesh, instances, groundInstanceIndex, shadowMapSize,
-                   shadowMapBits);
+    createRenderer(ctx, renderer, objectMesh, groundMesh, instances, groundInstanceIndex, shadowOptions);
 
     UserInterface ui = {};
     int caseTextCount = 0;
@@ -241,6 +265,10 @@ int main(int argc, char** argv)
     uiState.pcfEnabled = pcfEnabled;
     uiState.shadowMapSize = shadowMapSize;
     uiState.shadowMapBits = shadowMapBits;
+    uiState.shadowBackFaceDepth = backFaceDepth;
+    uiState.shadowNormalLift = normalLift;
+    uiState.shadowSlopeBias = slopeBias;
+    uiState.shadowDepthOffset = shadowDepthOffset;
 
     UiStatistics uiStatistics = {};
 
@@ -336,6 +364,31 @@ int main(int argc, char** argv)
                 return "err: shadow-bits takes 8, 16 or 32";
             }
             uiState.shadowMapBits = static_cast<uint32_t>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "back-face-depth" || verb == "normal-lift" || verb == "slope-bias") {
+            long value = 0;
+            if (!(stream >> value) || (value != 0 && value != 1)) {
+                return "err: " + verb + " takes 0 or 1";
+            }
+            const bool enabled = value == 1;
+            if (verb == "back-face-depth") {
+                uiState.shadowBackFaceDepth = enabled;
+            } else if (verb == "normal-lift") {
+                uiState.shadowNormalLift = enabled;
+            } else {
+                uiState.shadowSlopeBias = enabled;
+            }
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "depth-offset") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 0.0 || value > SHADOW_DEPTH_OFFSET_MAX) {
+                return "err: depth-offset out of range";
+            }
+            uiState.shadowDepthOffset = static_cast<float>(value);
             resetTimingWindows(timingStore);
             return "ok";
         }
@@ -452,9 +505,14 @@ int main(int argc, char** argv)
         const float aspectRatio = static_cast<float>(ctx.swapchainExtent.width) /
                                   static_cast<float>(ctx.swapchainExtent.height);
 
+        shadowOptions.mapSize = uiState.shadowMapSize;
+        shadowOptions.mapBits = uiState.shadowMapBits;
+        shadowOptions.backFaceDepth = uiState.shadowBackFaceDepth;
+
         ShadowSceneUniform sceneUniform;
-        fillShadowUniform(camera, aspectRatio, lightDirection, sceneRadius, uiState.shadowMapSize,
-                          uiState.shadowsEnabled, uiState.pcfEnabled, sceneUniform);
+        fillShadowUniform(camera, aspectRatio, lightDirection, sceneRadius, shadowOptions,
+                          uiState.shadowDepthOffset, uiState.shadowsEnabled, uiState.pcfEnabled,
+                          uiState.shadowNormalLift, uiState.shadowSlopeBias, sceneUniform);
 
         const bool shouldExit = autoExitSeconds > 0.0 && currentTime - startTime >= autoExitSeconds;
         const bool shouldCaptureThisFrame = captureRequested && !captureDone && shouldExit;
@@ -468,8 +526,7 @@ int main(int argc, char** argv)
         input.drawUserInterface = interfaceEnabled;
         input.shadowsEnabled = uiState.shadowsEnabled;
         input.pcfRadius = uiState.pcfEnabled ? 1.0f : 0.0f;
-        input.shadowMapSize = uiState.shadowMapSize;
-        input.shadowMapBits = uiState.shadowMapBits;
+        input.shadow = shadowOptions;
         input.captureBuffer = shouldCaptureThisFrame ? &captureBuffer : nullptr;
 
         FrameStatistics statistics = {};

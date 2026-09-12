@@ -15,7 +15,8 @@ layout(set = 0, binding = 0) uniform SceneBuffer {
     vec4 cameraPosition;
     vec4 lightDirection;  // xyz 指向光源的单位向量
     vec4 lightColor;      // rgb 颜色, a 强度
-    vec4 shadowParams;    // x 深度偏移, y 阴影贴图纹素大小, z PCF 半径, w 阴影开关
+    vec4 shadowParams;    // x 基础深度偏移, y 阴影贴图纹素大小, z PCF 半径, w 阴影开关
+    vec4 shadowOptions;   // x 法线抬升开关, y 角度偏移开关, z 法线抬升距离（世界单位）, w 保留
 } scene;
 
 layout(set = 0, binding = 1) readonly buffer InstanceBuffer {

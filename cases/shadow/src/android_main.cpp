@@ -93,8 +93,9 @@ static std::string shadowReportPrefix(uint32_t instances, uint32_t drawCommands)
 
 // 由光源的两个角度与场景半径构造光源的正交投影
 static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm::vec3& lightDirection,
-                              float sceneRadius, uint32_t shadowMapSize, bool shadowsEnabled,
-                              bool pcfEnabled, ShadowSceneUniform& outUniform)
+                              float sceneRadius, const ShadowOptions& shadowOptions, float depthOffset,
+                              bool shadowsEnabled, bool pcfEnabled, bool normalLift, bool slopeBias,
+                              ShadowSceneUniform& outUniform)
 {
     CameraMatrices matrices;
     fillCameraMatrices(camera, aspectRatio, matrices);
@@ -114,8 +115,11 @@ static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm
 
     outUniform.lightDirection = glm::vec4(lightDirection, 0.0f);
     outUniform.lightColor = glm::vec4(1.0f, 0.96f, 0.9f, 3.0f);
-    outUniform.shadowParams = glm::vec4(0.0005f, 1.0f / static_cast<float>(shadowMapSize),
+    outUniform.shadowParams = glm::vec4(depthOffset, 1.0f / static_cast<float>(shadowOptions.mapSize),
                                         pcfEnabled ? 1.0f : 0.0f, shadowsEnabled ? 1.0f : 0.0f);
+    // 法线抬升的距离取世界空间里一个阴影贴图纹素的宽度
+    const float liftDistance = 2.0f * radius / static_cast<float>(shadowOptions.mapSize);
+    outUniform.shadowOptions = glm::vec4(normalLift ? 1.0f : 0.0f, slopeBias ? 1.0f : 0.0f, liftDistance, 0.0f);
 }
 
 static void initializeRendererStack(AppState& state, android_app* app)
@@ -144,8 +148,13 @@ static void initializeRendererStack(AppState& state, android_app* app)
     groundInstance.positionScale = glm::vec4(0.0f, 0.0f, 0.0f, groundScale);
     state.instances.push_back(groundInstance);
 
+    ShadowOptions shadowOptions = {};
+    shadowOptions.mapSize = state.uiState.shadowMapSize;
+    shadowOptions.mapBits = state.uiState.shadowMapBits;
+    shadowOptions.backFaceDepth = state.uiState.shadowBackFaceDepth;
+
     createRenderer(state.ctx, state.renderer, state.objectMesh, state.groundMesh, state.instances,
-                   groundInstanceIndex, state.uiState.shadowMapSize, state.uiState.shadowMapBits);
+                   groundInstanceIndex, shadowOptions);
 
     int caseTextCount = 0;
     const char* const* caseTexts = caseInterfaceTexts(caseTextCount);
@@ -302,17 +311,23 @@ static void drawOneFrame(AppState& state)
     const float aspectRatio = static_cast<float>(state.ctx.swapchainExtent.width) /
                               static_cast<float>(state.ctx.swapchainExtent.height);
 
+    ShadowOptions shadowOptions = {};
+    shadowOptions.mapSize = state.uiState.shadowMapSize;
+    shadowOptions.mapBits = state.uiState.shadowMapBits;
+    shadowOptions.backFaceDepth = state.uiState.shadowBackFaceDepth;
+
     ShadowSceneUniform sceneUniform;
-    fillShadowUniform(state.camera, aspectRatio, lightDirection, sceneRadius, state.uiState.shadowMapSize,
-                      state.uiState.shadowsEnabled, state.uiState.pcfEnabled, sceneUniform);
+    fillShadowUniform(state.camera, aspectRatio, lightDirection, sceneRadius, shadowOptions,
+                      state.uiState.shadowDepthOffset, state.uiState.shadowsEnabled,
+                      state.uiState.pcfEnabled, state.uiState.shadowNormalLift,
+                      state.uiState.shadowSlopeBias, sceneUniform);
 
     FrameInput input = {};
     input.activeInstanceCount = activeInstanceCount;
     input.drawUserInterface = true;
     input.shadowsEnabled = state.uiState.shadowsEnabled;
     input.pcfRadius = state.uiState.pcfEnabled ? 1.0f : 0.0f;
-    input.shadowMapSize = state.uiState.shadowMapSize;
-    input.shadowMapBits = state.uiState.shadowMapBits;
+    input.shadow = shadowOptions;
 
     FrameStatistics statistics = {};
     const bool frameDrawn = drawFrame(state.ctx, state.renderer, state.frameCounter, input, sceneUniform,
@@ -422,6 +437,31 @@ static void installControlHandler(AppState& state)
             resetTimingWindows(state.timingStore);
             return "ok";
         }
+        if (verb == "back-face-depth" || verb == "normal-lift" || verb == "slope-bias") {
+            long value = 0;
+            if (!(stream >> value) || (value != 0 && value != 1)) {
+                return "err: " + verb + " takes 0 or 1";
+            }
+            const bool enabled = value == 1;
+            if (verb == "back-face-depth") {
+                state.uiState.shadowBackFaceDepth = enabled;
+            } else if (verb == "normal-lift") {
+                state.uiState.shadowNormalLift = enabled;
+            } else {
+                state.uiState.shadowSlopeBias = enabled;
+            }
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "depth-offset") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 0.0 || value > SHADOW_DEPTH_OFFSET_MAX) {
+                return "err: depth-offset out of range";
+            }
+            state.uiState.shadowDepthOffset = static_cast<float>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
         if (verb == "begin") {
             state.segmentActive = true;
             state.segmentStartSeconds = nowSeconds();
@@ -466,6 +506,10 @@ void android_main(android_app* app)
     state.uiState.pcfEnabled = true;
     state.uiState.shadowMapSize = SHADOW_MAP_DEFAULT_SIZE;
     state.uiState.shadowMapBits = SHADOW_MAP_DEFAULT_BITS;
+    state.uiState.shadowBackFaceDepth = true;
+    state.uiState.shadowNormalLift = true;
+    state.uiState.shadowSlopeBias = true;
+    state.uiState.shadowDepthOffset = SHADOW_DEPTH_OFFSET_DEFAULT;
 
     app->userData = &state;
     app->onAppCmd = handleAppCommand;
