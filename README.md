@@ -11,6 +11,7 @@
 | [`cases/perspective_interpolation`](cases/perspective_interpolation/README.md) | 透视矫正插值与仿射插值，对比一块大地面上的纹理坐标差异 |
 | [`cases/texture_lod`](cases/texture_lod/README.md) | 多级纹理、LOD 与各向异性过滤，对比层级钳制与各向异性倍数的画面差异 |
 | [`cases/srgb_linear`](cases/srgb_linear/README.md) | sRGB 与线性空间，对比贴图解释方式、输出编码与色调映射，并附一条可对照理论值的参考条 |
+| [`cases/early_z`](cases/early_z/README.md) | early-Z、深度预通道与 discard，对比绘制顺序与预通道对设备时间的影响 |
 | [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
 
 ## 目录结构
