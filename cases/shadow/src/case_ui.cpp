@@ -65,10 +65,15 @@ static const char* const TEXT_BACK_FACE_DEPTH = "只写背面深度";
 static const char* const TEXT_NORMAL_LIFT = "法线抬升采样点";
 static const char* const TEXT_SLOPE_BIAS = "掠射角放大偏移";
 static const char* const TEXT_DEPTH_OFFSET = "基础深度偏移";
+static const char* const TEXT_GROUND_CASTER = "地面写入阴影贴图";
 static const char* const TEXT_ARTIFACT_HINT =
     "三项可以逐项关闭，基础深度偏移可以拉到零。只关掉其中某一项时另外几项仍在兜底，变化不大；"
-    "把只写背面深度关掉、再把基础深度偏移拉到零，自阴影条纹会立刻爬满受光表面。把基础深度偏移"
+    "把只写背面深度关掉、再把基础深度偏移拉到零，自阴影条纹会立刻爬满物体表面。把基础深度偏移"
     "调得过大，物体与地面相接处的阴影会脱开，出现漏光。";
+static const char* const TEXT_GROUND_HINT =
+    "勾上之后地面也写进阴影贴图。地面是一整块没有厚度的平面，它拿自己写入的深度与自己比较，"
+    "深度上没有余量，受光比例会按贴图纹素跳变，于是整块地面都会出现条纹；把基础深度偏移调大，"
+    "条纹随之减弱。";
 
 static const char* const TEXT_SECTION_GUIDE = "操作指南";
 static const char* const TEXT_GUIDE_MOVE = "W A S D 前后左右移动，Q 下降，E 上升";
@@ -91,10 +96,10 @@ static const char* const CASE_INTERFACE_TEXTS[] = {
     SHADOW_MAP_SIZE_LABELS[3], SHADOW_MAP_BITS_LABELS[0], SHADOW_MAP_BITS_LABELS[1],
     SHADOW_MAP_BITS_LABELS[2], TEXT_SECTION_ARTIFACTS,     TEXT_BACK_FACE_DEPTH,
     TEXT_NORMAL_LIFT,          TEXT_SLOPE_BIAS,           TEXT_DEPTH_OFFSET,
-    TEXT_ARTIFACT_HINT,        TEXT_SECTION_WORKLOAD,     TEXT_DRAW_COMMANDS,
-    TEXT_SHADOW_MAP,           TEXT_SECTION_GUIDE,        TEXT_GUIDE_MOVE,
-    TEXT_GUIDE_LOOK,           TEXT_GUIDE_QUIT,           TEXT_GUIDE_DRAG,
-    TEXT_EXPLANATION,
+    TEXT_GROUND_CASTER,        TEXT_ARTIFACT_HINT,        TEXT_GROUND_HINT,
+    TEXT_SECTION_WORKLOAD,     TEXT_DRAW_COMMANDS,        TEXT_SHADOW_MAP,
+    TEXT_SECTION_GUIDE,        TEXT_GUIDE_MOVE,           TEXT_GUIDE_LOOK,
+    TEXT_GUIDE_QUIT,           TEXT_GUIDE_DRAG,           TEXT_EXPLANATION,
 };
 
 enum { CASE_INTERFACE_TEXT_COUNT = sizeof(CASE_INTERFACE_TEXTS) / sizeof(CASE_INTERFACE_TEXTS[0]) };
@@ -151,6 +156,10 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
     ImGui::Checkbox(TEXT_SLOPE_BIAS, &state.shadowSlopeBias);
     ImGui::SliderFloat(TEXT_DEPTH_OFFSET, &state.shadowDepthOffset, 0.0f, SHADOW_DEPTH_OFFSET_MAX, "%.4f");
     ImGui::TextWrapped(TEXT_ARTIFACT_HINT);
+
+    ImGui::Spacing();
+    ImGui::Checkbox(TEXT_GROUND_CASTER, &state.shadowGroundCaster);
+    ImGui::TextWrapped(TEXT_GROUND_HINT);
 
     buildGpuClockPanel(gpuClockLockState, gpuClockMonitor);
     buildTimingPanel(timing);

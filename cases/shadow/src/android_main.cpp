@@ -152,6 +152,7 @@ static void initializeRendererStack(AppState& state, android_app* app)
     shadowOptions.mapSize = state.uiState.shadowMapSize;
     shadowOptions.mapBits = state.uiState.shadowMapBits;
     shadowOptions.backFaceDepth = state.uiState.shadowBackFaceDepth;
+    shadowOptions.groundCaster = state.uiState.shadowGroundCaster;
 
     createRenderer(state.ctx, state.renderer, state.objectMesh, state.groundMesh, state.instances,
                    groundInstanceIndex, shadowOptions);
@@ -315,6 +316,7 @@ static void drawOneFrame(AppState& state)
     shadowOptions.mapSize = state.uiState.shadowMapSize;
     shadowOptions.mapBits = state.uiState.shadowMapBits;
     shadowOptions.backFaceDepth = state.uiState.shadowBackFaceDepth;
+    shadowOptions.groundCaster = state.uiState.shadowGroundCaster;
 
     ShadowSceneUniform sceneUniform;
     fillShadowUniform(state.camera, aspectRatio, lightDirection, sceneRadius, shadowOptions,
@@ -453,6 +455,15 @@ static void installControlHandler(AppState& state)
             resetTimingWindows(state.timingStore);
             return "ok";
         }
+        if (verb == "ground-caster") {
+            long value = 0;
+            if (!(stream >> value) || (value != 0 && value != 1)) {
+                return "err: ground-caster takes 0 or 1";
+            }
+            state.uiState.shadowGroundCaster = value == 1;
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
         if (verb == "depth-offset") {
             double value = 0.0;
             if (!(stream >> value) || value < 0.0 || value > SHADOW_DEPTH_OFFSET_MAX) {
@@ -510,6 +521,7 @@ void android_main(android_app* app)
     state.uiState.shadowNormalLift = true;
     state.uiState.shadowSlopeBias = true;
     state.uiState.shadowDepthOffset = SHADOW_DEPTH_OFFSET_DEFAULT;
+    state.uiState.shadowGroundCaster = false;
 
     app->userData = &state;
     app->onAppCmd = handleAppCommand;

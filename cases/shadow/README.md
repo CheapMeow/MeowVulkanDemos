@@ -67,6 +67,14 @@ graph LR
 
 只写背面深度决定阴影管线的剔除面，改动时重建管线；法线抬升、掠射角放大偏移与基础深度偏移只进 uniform，不触发重建。
 
+### 地面是否参与投影
+
+阴影通道默认只画物体实例，地面那一份实例变换放在实例缓冲末尾，绘制范围取不到它，因此地面只在主通道里当接收者。面板上的「地面写入阴影贴图」把地面也画进阴影通道，它在阴影通道里不剔除，用单独一条管线。
+
+自阴影条纹要求同一个表面既写入贴图又参与比较。地面是一整块没有厚度的平面，写进去之后它拿自己刚写入的深度与自己比较，深度上不留余量，受光比例按贴图纹素跳变，整块地面都会出现条纹。这正好说明条纹只在写入贴图的表面上产生：地面不写进去时，无论关掉多少项处理，它都不会有条纹。
+
+地面参与投影之后，基础深度偏移与位数的作用也变得直观：偏移调零时条纹最重，偏移调大后条纹被推回去；位数降到 8 位时，量化档距本身就超过了填补余量所需的偏移，默认偏移下条纹也会大量出现。
+
 ### 深度值的存储与比较
 
 深度值写进一张颜色附件，采样器不做硬件比较，主通道逐纹素取出深度后在着色器里手动比较：参考深度不大于贴图里存的深度就算受光。采样器的滤波必须是最近邻，否则会把相邻纹素的深度值平均掉。
@@ -107,6 +115,7 @@ graph LR
 | 法线抬升采样点 | 采样位置沿世界法线抬起，关闭后条纹变多 |
 | 掠射角放大偏移 | 按入射角放大深度偏移，关闭后掠射角处的条纹变多 |
 | 基础深度偏移 | 比较时的常数偏移，拉到零可以单独观察上面几项的作用 |
+| 地面写入阴影贴图 | 把地面也画进阴影通道，地面因此与自己比较而出现条纹 |
 | GPU 锁频 | 与间接绘制 case 共用同一个面板 |
 
 面板同时显示绘制命令条数与阴影贴图说明，另附操作指南；耗时面板按本 case 的通道拆分逐项列出。
@@ -128,6 +137,7 @@ graph LR
 | `--no-normal-lift` | 启动时关闭法线抬升 | 开启 |
 | `--no-slope-bias` | 启动时关闭掠射角放大偏移 | 开启 |
 | `--depth-offset F` | 基础深度偏移，取值 0 到 0.004 | 0.0005 |
+| `--ground-caster` | 启动时把地面也画进阴影通道 | 只画物体 |
 | `--no-interface` | 不显示界面面板 | 显示 |
 | `--auto-exit S` | 运行 S 秒后自动退出 | 关闭 |
 | `--capture 文件名` | 退出前把画面写成 PNG 并打印像素统计 | 关闭 |
@@ -170,13 +180,22 @@ build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture in
 
 第一张把保护全部撤掉，条纹最重；第二张只关掉只写背面深度，用来单独看这一项的作用；第三张把基础深度偏移拉到上限，可以看到物体与地面相接处的阴影脱开。
 
+地面参与投影的开关单独抓帧：
+
+```
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_ground.png --ground-caster --depth-offset 0
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_ground8.png --ground-caster --shadow-bits 8
+```
+
+第一张是地面写进贴图、基础深度偏移调零，整块地面出现条纹；第二张保留默认偏移但把位数降到 8 位，量化档距超过填补余量所需的偏移，条纹同样大量出现。
+
 光源角度可以在同一次运行里改变，用来看阴影随光源移动的方向：
 
 ```
 adb -s <serial> forward tcp:21000 tcp:21000
 ```
 
-桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`instances`/`yaw`/`pitch` 改配置，`shadows 1`/`shadows 0` 开关阴影，`pcf 1`/`pcf 0` 开关软阴影，`shadow-size` 与 `shadow-bits` 改贴图配置并触发重建，`back-face-depth`/`normal-lift`/`slope-bias` 取 0 或 1 逐项开关瑕疵处理，`depth-offset` 改基础深度偏移，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
+桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`instances`/`yaw`/`pitch` 改配置，`shadows 1`/`shadows 0` 开关阴影，`pcf 1`/`pcf 0` 开关软阴影，`shadow-size` 与 `shadow-bits` 改贴图配置并触发重建，`back-face-depth`/`normal-lift`/`slope-bias` 取 0 或 1 逐项开关瑕疵处理，`depth-offset` 改基础深度偏移，`ground-caster 0|1` 开关地面参与投影，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
 
 随时间变化的参数曲线与测量报告格式与间接绘制 case 一致，报告里的前两列是实例数量与绘制命令条数。
 
@@ -188,7 +207,7 @@ adb -s <serial> forward tcp:21000 tcp:21000
 | --- | --- |
 | `src/main.cpp` | 桌面入口：命令行解析、主循环与界面状态 |
 | `src/android_main.cpp` | 安卓入口：NativeActivity 生命周期、ANativeWindow 表面与交换链、主循环 |
-| `src/renderer.cpp` | 阴影与主通道两个渲染通道、三条管线、阴影贴图的创建与重建、时间戳查询 |
+| `src/renderer.cpp` | 阴影与主通道两个渲染通道、四条管线、阴影贴图的创建与重建、时间戳查询 |
 | `src/scene_setup.cpp` | 地面网格、实例网格摆放、光源正交投影需要的网格范围 |
 | `src/case_ui.cpp` | 本 case 的控制面板与全部界面文本 |
 | `src/timing_items.cpp` | 本 case 的计时项定义 |

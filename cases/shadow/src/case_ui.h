@@ -21,6 +21,8 @@ struct UiState {
     bool shadowNormalLift;
     bool shadowSlopeBias;
     float shadowDepthOffset;
+    // 地面是否也写进阴影贴图，写进去之后地面会与自己比较，出现自阴影条纹
+    bool shadowGroundCaster;
 };
 
 // 界面上显示的本帧工作量，耗时统计由 TimingStore 提供

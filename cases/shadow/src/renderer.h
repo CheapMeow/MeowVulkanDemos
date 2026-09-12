@@ -43,6 +43,7 @@ struct ShadowOptions {
     uint32_t mapSize;
     uint32_t mapBits;
     bool backFaceDepth;  // 阴影通道只写入背面，用物体厚度换来深度余量
+    bool groundCaster;   // 地面也写进阴影贴图，写进去之后地面会与自己比较，出现自阴影条纹
 };
 
 struct ShadowFrameResources {
@@ -99,6 +100,8 @@ struct ShadowRenderer {
 
     VkPipelineLayout shadowPipelineLayout;
     VkPipeline shadowPipeline;
+    // 地面是单面几何，阴影通道里不做剔除，单独一条管线
+    VkPipeline shadowGroundPipeline;
     VkPipelineLayout scenePipelineLayout;
     VkPipeline scenePipeline;
     VkPipeline groundPipeline;

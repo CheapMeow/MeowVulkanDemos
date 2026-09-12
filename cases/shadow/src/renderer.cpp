@@ -381,16 +381,6 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
     viewportState.viewportCount = 1;
     viewportState.scissorCount = 1;
 
-    VkPipelineRasterizationStateCreateInfo rasterization = {};
-    rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-    // 只写入背面时，主通道里的受光表面稳定处在阴影贴图深度之前，用物体厚度换来深度余量
-    rasterization.cullMode = renderer.shadowBackFaceDepth ? VK_CULL_MODE_FRONT_BIT : VK_CULL_MODE_BACK_BIT;
-    rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rasterization.lineWidth = 1.0f;
-    // 贴图里的深度由片元着色器写进颜色附件，光栅化的深度偏移只作用在深度测试上，
-    // 影响不到写入值，因此这里不启用
-
     VkPipelineMultisampleStateCreateInfo multisample = {};
     multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -416,24 +406,44 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates = dynamicStates;
 
-    VkGraphicsPipelineCreateInfo pipelineInfo = {};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = 2;
-    pipelineInfo.pStages = stages;
-    pipelineInfo.pVertexInputState = &vertexInput;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterization;
-    pipelineInfo.pMultisampleState = &multisample;
-    pipelineInfo.pDepthStencilState = &depthStencil;
-    pipelineInfo.pColorBlendState = &colorBlend;
-    pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = renderer.shadowPipelineLayout;
-    pipelineInfo.renderPass = renderer.shadowRenderPass;
-    pipelineInfo.subpass = 0;
+    // 物体与地面各一条管线，差别只在剔除方式：地面是单面几何，不做剔除
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool groundPass = pass == 1;
 
-    VK_CHECK(vkCreateGraphicsPipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
-                                       &renderer.shadowPipeline));
+        VkPipelineRasterizationStateCreateInfo rasterization = {};
+        rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterization.polygonMode = VK_POLYGON_MODE_FILL;
+        // 只写入背面时，主通道里的受光表面稳定处在阴影贴图深度之前，用物体厚度换来深度余量
+        rasterization.cullMode = groundPass
+                                     ? VK_CULL_MODE_NONE
+                                     : (renderer.shadowBackFaceDepth ? VK_CULL_MODE_FRONT_BIT
+                                                                     : VK_CULL_MODE_BACK_BIT);
+        rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterization.lineWidth = 1.0f;
+        // 贴图里的深度由片元着色器写进颜色附件，光栅化的深度偏移只作用在深度测试上，
+        // 影响不到写入值，因此这里不启用
+
+        VkGraphicsPipelineCreateInfo pipelineInfo = {};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount = 2;
+        pipelineInfo.pStages = stages;
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterization;
+        pipelineInfo.pMultisampleState = &multisample;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamicState;
+        pipelineInfo.layout = renderer.shadowPipelineLayout;
+        pipelineInfo.renderPass = renderer.shadowRenderPass;
+        pipelineInfo.subpass = 0;
+
+        VkPipeline* targetPipeline =
+            groundPass ? &renderer.shadowGroundPipeline : &renderer.shadowPipeline;
+        VK_CHECK(vkCreateGraphicsPipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                           targetPipeline));
+    }
 
     vkDestroyShaderModule(ctx.device, fragmentModule, nullptr);
     vkDestroyShaderModule(ctx.device, vertexModule, nullptr);
@@ -665,6 +675,7 @@ void destroyRenderer(const VulkanContext& ctx, ShadowRenderer& renderer)
     vkDestroyPipeline(ctx.device, renderer.groundPipeline, nullptr);
     vkDestroyPipeline(ctx.device, renderer.scenePipeline, nullptr);
     vkDestroyPipelineLayout(ctx.device, renderer.scenePipelineLayout, nullptr);
+    vkDestroyPipeline(ctx.device, renderer.shadowGroundPipeline, nullptr);
     vkDestroyPipeline(ctx.device, renderer.shadowPipeline, nullptr);
     vkDestroyPipelineLayout(ctx.device, renderer.shadowPipelineLayout, nullptr);
 
@@ -708,6 +719,7 @@ static void applyShadowOptions(const VulkanContext& ctx, ShadowRenderer& rendere
     // 旧的贴图与管线可能还被另一帧使用，先等设备空闲再拆
     VK_CHECK(vkDeviceWaitIdle(ctx.device));
 
+    vkDestroyPipeline(ctx.device, renderer.shadowGroundPipeline, nullptr);
     vkDestroyPipeline(ctx.device, renderer.shadowPipeline, nullptr);
     vkDestroyPipelineLayout(ctx.device, renderer.shadowPipelineLayout, nullptr);
 
@@ -822,10 +834,22 @@ bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t fram
                                 0, 1, &frame.sceneSet, 0, nullptr);
         vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &renderer.objectVertexBuffer.buffer, &vertexOffset);
         vkCmdBindIndexBuffer(frame.commandBuffer, renderer.objectIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-        // 地面不参与投影，阴影通道只画物体
         vkCmdDrawIndexed(frame.commandBuffer, renderer.objectIndexCount, input.activeInstanceCount, 0, 0, 0);
-        vkCmdEndRenderPass(frame.commandBuffer);
         ++drawCallCount;
+
+        if (input.shadow.groundCaster) {
+            // 地面写进贴图后会与自身比较，受光比例在平坦表面上按深度量化结果跳变，形成条纹。
+            // 地面的实例变换同样放在实例缓冲末尾，用 firstInstance 指向它
+            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              renderer.shadowGroundPipeline);
+            vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &renderer.groundVertexBuffer.buffer, &vertexOffset);
+            vkCmdBindIndexBuffer(frame.commandBuffer, renderer.groundIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(frame.commandBuffer, renderer.groundIndexCount, 1, 0, 0,
+                             renderer.groundInstanceIndex);
+            ++drawCallCount;
+        }
+
+        vkCmdEndRenderPass(frame.commandBuffer);
     }
     outStatistics.cpuRecordShadowPassMilliseconds = (nowSeconds() - shadowPassStart) * 1000.0;
 

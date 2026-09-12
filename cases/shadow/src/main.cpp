@@ -107,6 +107,7 @@ int main(int argc, char** argv)
     bool normalLift = true;
     bool slopeBias = true;
     float shadowDepthOffset = SHADOW_DEPTH_OFFSET_DEFAULT;
+    bool groundCaster = false;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--instances") == 0 && i + 1 < argc) {
@@ -144,6 +145,8 @@ int main(int argc, char** argv)
         } else if (std::strcmp(argv[i], "--depth-offset") == 0 && i + 1 < argc) {
             shadowDepthOffset = static_cast<float>(std::atof(argv[i + 1]));
             ++i;
+        } else if (std::strcmp(argv[i], "--ground-caster") == 0) {
+            groundCaster = true;
         } else if (std::strcmp(argv[i], "--light-yaw") == 0 && i + 1 < argc) {
             lightYawDegrees = static_cast<float>(std::atof(argv[i + 1]));
             ++i;
@@ -236,6 +239,7 @@ int main(int argc, char** argv)
     shadowOptions.mapSize = shadowMapSize;
     shadowOptions.mapBits = shadowMapBits;
     shadowOptions.backFaceDepth = backFaceDepth;
+    shadowOptions.groundCaster = groundCaster;
 
     ShadowRenderer renderer = {};
     createRenderer(ctx, renderer, objectMesh, groundMesh, instances, groundInstanceIndex, shadowOptions);
@@ -269,6 +273,7 @@ int main(int argc, char** argv)
     uiState.shadowNormalLift = normalLift;
     uiState.shadowSlopeBias = slopeBias;
     uiState.shadowDepthOffset = shadowDepthOffset;
+    uiState.shadowGroundCaster = groundCaster;
 
     UiStatistics uiStatistics = {};
 
@@ -380,6 +385,15 @@ int main(int argc, char** argv)
             } else {
                 uiState.shadowSlopeBias = enabled;
             }
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "ground-caster") {
+            long value = 0;
+            if (!(stream >> value) || (value != 0 && value != 1)) {
+                return "err: ground-caster takes 0 or 1";
+            }
+            uiState.shadowGroundCaster = value == 1;
             resetTimingWindows(timingStore);
             return "ok";
         }
@@ -508,6 +522,7 @@ int main(int argc, char** argv)
         shadowOptions.mapSize = uiState.shadowMapSize;
         shadowOptions.mapBits = uiState.shadowMapBits;
         shadowOptions.backFaceDepth = uiState.shadowBackFaceDepth;
+        shadowOptions.groundCaster = uiState.shadowGroundCaster;
 
         ShadowSceneUniform sceneUniform;
         fillShadowUniform(camera, aspectRatio, lightDirection, sceneRadius, shadowOptions,
