@@ -1,12 +1,14 @@
 #ifdef __ANDROID__
 
 #include "asset_file.h"
+#include "case_ui.h"
 #include "control_server.h"
 #include "gpu_clock_lock.h"
 #include "obj_loader.h"
 #include "renderer.h"
 #include "scene.h"
 #include "timing.h"
+#include "timing_items.h"
 #include "user_interface.h"
 #include "vk_check.h"
 #include "vk_context.h"
@@ -22,11 +24,14 @@
 
 #include <imgui_impl_android.h>
 
-#define ANDROID_LOG_TAG "VulkanIndirectDrawDemo"
+#define ANDROID_LOG_TAG "MeowVulkanDemo"
 #define LOG_I(...) __android_log_print(ANDROID_LOG_INFO, ANDROID_LOG_TAG, __VA_ARGS__)
 
 // 安卓入口的完整状态。实例与逻辑设备建好一次即可复用，交换链跟随 ANativeWindow 的生死重建
 namespace {
+
+// 报告里 case 自己的前几列
+const char* const REPORT_HEADER_COLUMNS = "draw_path,instances,visible_instances,draw_commands";
 
 struct AppState {
     VulkanContext ctx = {};
@@ -38,6 +43,7 @@ struct AppState {
     TimingStore timingStore = {};
     GpuClockLockState gpuClockLockState = {};
     GpuClockMonitor gpuClockMonitor = {};
+    std::string reportHeaderColumns;
 
     std::vector<InstanceData> instances;
     std::vector<LightData> lights;
@@ -74,6 +80,16 @@ static constexpr double kWarmUpSeconds = 1.5;
 // TCP 控制服务端口，脚本通过 adb reverse 把本机端口映射到设备
 static constexpr uint16_t kControlPort = 21000;
 
+// 报告里 case 自己的前几列
+static std::string indirectReportPrefix(DrawPath drawPath, uint32_t instances, uint32_t visibleInstances,
+                                        uint32_t drawCommands)
+{
+    char prefix[128];
+    std::snprintf(prefix, sizeof(prefix), "%s,%u,%u,%u", drawPathName(drawPath), instances, visibleInstances,
+                  drawCommands);
+    return std::string(prefix);
+}
+
 // 第一块可用的窗口出现时做全量初始化：表面 -> 设备 -> 交换链 -> 网格与全部渲染资源
 static void initializeRendererStack(AppState& state, android_app* app)
 {
@@ -92,7 +108,10 @@ static void initializeRendererStack(AppState& state, android_app* app)
     state.visibleIndices.resize(state.instanceCapacity);
 
     createRenderer(state.ctx, state.renderer, state.mesh, state.instances, state.lightCapacity);
-    createUserInterface(state.ctx, state.renderer, state.ui);
+
+    int caseTextCount = 0;
+    const char* const* caseTexts = caseInterfaceTexts(caseTextCount);
+    createUserInterface(state.ctx, state.renderer.lightingRenderPass, caseTexts, caseTextCount, state.ui);
     initCamera(state.camera, state.instances);
 
     state.uiState.drawPath = DRAW_PATH_TRADITIONAL;
@@ -104,6 +123,8 @@ static void initializeRendererStack(AppState& state, android_app* app)
 
     state.startSeconds = nowSeconds();
     state.previousSeconds = state.startSeconds;
+    initTimingStore(state.timingStore, caseTimingItems(), TIMING_ID_COUNT, state.startSeconds);
+    state.reportHeaderColumns = std::string(REPORT_HEADER_COLUMNS) + timingReportHeaderColumns(state.timingStore);
     state.vulkanInitialized = true;
     state.swapchainReady = true;
     LOG_I("android renderer initialized, instances %d, light capacity %u", state.uiState.activeInstanceCount,
@@ -364,10 +385,11 @@ static void installControlHandler(AppState& state)
             if (state.timingStore.report[TIMING_FRAME].sampleCount == 0) {
                 return "err: segment had no sampled frames";
             }
-            const std::string row = timingReportLine(
-                drawPathName(state.uiState.drawPath),
-                static_cast<uint32_t>(state.uiState.activeInstanceCount), state.segmentVisibleCount,
-                state.segmentDrawCallCount, state.timingStore);
+            const std::string row =
+                indirectReportPrefix(state.uiState.drawPath,
+                                     static_cast<uint32_t>(state.uiState.activeInstanceCount),
+                                     state.segmentVisibleCount, state.segmentDrawCallCount) +
+                timingReportValueColumns(state.timingStore);
             state.segmentActive = false;
             resetTimingReport(state.timingStore);
             return "row " + row;

@@ -32,14 +32,12 @@ struct LightData {
     glm::vec4 color;
 };
 
-// 与着色器中的 CameraBuffer 逐字节对应
-struct CameraUniform {
+// 相机矩阵。相机相关的字段在任何 case 里都一样，cullParams 之类的用法差异由 case 自己扩展
+struct CameraMatrices {
     glm::mat4 view;
     glm::mat4 projection;
     glm::mat4 viewProjection;
     glm::vec4 cameraPosition;
-    glm::vec4 frustumPlanes[6];
-    glm::vec4 cullParams;
 };
 
 struct Camera {
@@ -61,8 +59,15 @@ void updateLights(const glm::vec3& cameraPosition, uint32_t lightCount, float sp
 
 void initCamera(Camera& camera, const std::vector<InstanceData>& instances);
 void updateCamera(Camera& camera, const CameraInput& input, float deltaSeconds);
-void fillCameraUniform(const Camera& camera, float aspectRatio, uint32_t instanceCount, float boundsRadius,
-                       uint32_t lightCount, CameraUniform& outUniform);
+
+// 相机的视图矩阵、投影矩阵、二者乘积与世界位置。投影矩阵已按 Vulkan 的裁剪空间翻转 Y 轴
+void fillCameraMatrices(const Camera& camera, float aspectRatio, CameraMatrices& outMatrices);
+
+// 相机朝向的单位向量
+glm::vec3 cameraForward(const Camera& camera);
+
+// 从视图投影矩阵按 Gribb-Hartmann 方法取出六个视锥平面，平面指向视锥内部为正
+void extractFrustumPlanes(const glm::mat4& viewProjection, glm::vec4* outPlanes);
 
 // 逐实例做包围球与视锥的相交判断，可见实例编号写入输出数组
 uint32_t cullInstancesOnCpu(const std::vector<InstanceData>& instances, uint32_t instanceCount,

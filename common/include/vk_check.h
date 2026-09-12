@@ -7,7 +7,7 @@
 
 #ifdef __ANDROID__
 #include <android/log.h>
-#define LOG_TAG "VulkanIndirectDrawDemo"
+#define LOG_TAG "MeowVulkanDemo"
 // 安卓没有控制台，错误走 logcat
 #define VK_CHECK(expr)                                                                        \
     do {                                                                                      \

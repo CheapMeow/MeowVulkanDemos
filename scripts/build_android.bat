@@ -16,6 +16,8 @@ rem     set "VULKAN_SDK_DIR=D:\path\to\VulkanSDK"
 
 set ROOT_DIR=%~dp0..
 set ANDROID_DIR=%ROOT_DIR%\android
+set DEMO_CASE=%~1
+if "%DEMO_CASE%"=="" set DEMO_CASE=indirect_draw
 
 if exist "%~dp0local_env.bat" (
     call "%~dp0local_env.bat"
@@ -39,7 +41,7 @@ if not exist "%ANDROID_HOME%\platform-tools" (
 )
 
 pushd "%ANDROID_DIR%"
-call gradlew.bat :app:assembleDebug --no-daemon
+call gradlew.bat :app:assembleDebug --no-daemon -PdemoCase=%DEMO_CASE%
 set RESULT=%ERRORLEVEL%
 popd
 

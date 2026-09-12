@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "VulkanIndirectDrawDemo"
+rootProject.name = "MeowVulkanDemos"
 include ":app"

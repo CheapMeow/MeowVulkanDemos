@@ -21,7 +21,7 @@ set REPORT=%OUT_DIR%\measure_report_android.csv
 set SCRIPT=%ROOT_DIR%\scripts\tcp_send.ps1
 set PORT=21000
 
-set PACKAGE=com.example.vulkanindirectdrawdemo
+set PACKAGE=com.example.meowvulkandemos
 set ACTIVITY=android.app.NativeActivity
 
 rem Resolve adb: prefer the Android SDK from local_env.bat when present.

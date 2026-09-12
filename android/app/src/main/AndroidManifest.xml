@@ -6,19 +6,19 @@
 
     <!-- NativeActivity 不申请其他权限 -->
     <application
-        android:label="Vulkan Indirect Draw Demo"
+        android:label="Meow Vulkan Demo"
         android:allowBackup="false">
 
         <activity
             android:name="android.app.NativeActivity"
-            android:label="Vulkan Indirect Draw Demo"
+            android:label="Meow Vulkan Demo"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"
             android:screenOrientation="landscape"
             android:exported="true">
 
             <meta-data
                 android:name="android.app.lib_name"
-                android:value="VulkanIndirectDrawDemo" />
+                android:value="meow_vulkan_demo" />
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

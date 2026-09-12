@@ -6,7 +6,7 @@ rem its TCP control server, one measurement segment per configuration, and the
 rem app appends one CSV row per segment end.
 
 set ROOT_DIR=%~dp0..
-set EXE=%ROOT_DIR%\build\VulkanIndirectDrawDemo.exe
+set EXE=%ROOT_DIR%\build\meow_indirect_draw.exe
 set OUT_DIR=%ROOT_DIR%\intermediate
 set REPORT=%OUT_DIR%\measure_report.csv
 set SCRIPT=%ROOT_DIR%\scripts\tcp_send.ps1

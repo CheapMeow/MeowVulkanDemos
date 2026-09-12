@@ -1,7 +1,8 @@
 @echo off
 setlocal
 
-rem Desktop build entry point. Dependency paths come from environment variables:
+rem Desktop build entry point. The first argument selects the case to build and
+rem defaults to indirect_draw. Dependency paths come from environment variables:
 rem   VS_DIR          -> Visual Studio installation root. The build uses the CMake
 rem                      and Ninja bundled with it and the MSVC toolchain through
 rem                      vcvars64.bat.
@@ -13,6 +14,8 @@ rem     set "VS_DIR=D:\path\to\Visual Studio\2019\Community"
 rem     set "VULKAN_SDK_DIR=D:\path\to\VulkanSDK"
 
 set ROOT_DIR=%~dp0..
+set DEMO_CASE=%~1
+if "%DEMO_CASE%"=="" set DEMO_CASE=indirect_draw
 
 if exist "%~dp0local_env.bat" (
     call "%~dp0local_env.bat"
@@ -35,13 +38,12 @@ set NINJA_EXE=%VS_DIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.
 call "%VCVARS%" >nul
 if errorlevel 1 exit /b 1
 
-if not exist "%ROOT_DIR%\build" (
-    "%CMAKE_EXE%" -S "%ROOT_DIR%" -B "%ROOT_DIR%\build" -G Ninja ^
-        -DCMAKE_MAKE_PROGRAM="%NINJA_EXE%" ^
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
-        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    if errorlevel 1 exit /b 1
-)
+"%CMAKE_EXE%" -S "%ROOT_DIR%" -B "%ROOT_DIR%\build" -G Ninja ^
+    -DCMAKE_MAKE_PROGRAM="%NINJA_EXE%" ^
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^
+    -DDEMO_CASE=%DEMO_CASE%
+if errorlevel 1 exit /b 1
 
 "%CMAKE_EXE%" --build "%ROOT_DIR%\build"
 exit /b %errorlevel%

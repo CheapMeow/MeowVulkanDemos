@@ -1,0 +1,19 @@
+# indirect draw case：对比逐实例、实例化与 indirect 三条几何提交路径
+meow_add_case(indirect_draw
+    SOURCES
+        src/renderer.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/gbuffer.vert
+        shaders/gbuffer.frag
+        shaders/fullscreen.vert
+        shaders/lighting.frag
+        shaders/cull.comp
+    SHADER_INCLUDES
+        shaders/scene_common.glsl
+)

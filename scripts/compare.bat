@@ -2,7 +2,7 @@
 setlocal
 
 set ROOT_DIR=%~dp0..
-set EXE=%ROOT_DIR%\build\VulkanIndirectDrawDemo.exe
+set EXE=%ROOT_DIR%\build\meow_indirect_draw.exe
 set OUT_DIR=%ROOT_DIR%\intermediate
 set REPORT=%OUT_DIR%\compare_report.csv
 set HASH_REPORT=%OUT_DIR%\compare_hashes.csv

@@ -98,7 +98,7 @@ void initCamera(Camera& camera, const std::vector<InstanceData>& instances)
     camera.moveSpeed = 40.0f;
 }
 
-static glm::vec3 cameraForward(const Camera& camera)
+glm::vec3 cameraForward(const Camera& camera)
 {
     return glm::vec3(std::cos(camera.pitch) * std::sin(camera.yaw), std::sin(camera.pitch),
                      -std::cos(camera.pitch) * std::cos(camera.yaw));
@@ -149,8 +149,20 @@ void updateCamera(Camera& camera, const CameraInput& input, float deltaSeconds)
     }
 }
 
+void fillCameraMatrices(const Camera& camera, float aspectRatio, CameraMatrices& outMatrices)
+{
+    const glm::vec3 forward = cameraForward(camera);
+    outMatrices.view = glm::lookAt(camera.position, camera.position + forward, glm::vec3(0.0f, 1.0f, 0.0f));
+    outMatrices.projection =
+        glm::perspective(camera.verticalFieldOfView, aspectRatio, camera.nearPlane, camera.farPlane);
+    // Vulkan 的裁剪空间 Y 轴朝下
+    outMatrices.projection[1][1] *= -1.0f;
+    outMatrices.viewProjection = outMatrices.projection * outMatrices.view;
+    outMatrices.cameraPosition = glm::vec4(camera.position, 1.0f);
+}
+
 // Gribb-Hartmann 方法，从视图投影矩阵取出六个视锥平面
-static void extractFrustumPlanes(const glm::mat4& viewProjection, glm::vec4* outPlanes)
+void extractFrustumPlanes(const glm::mat4& viewProjection, glm::vec4* outPlanes)
 {
     const glm::vec4 rowX = glm::vec4(viewProjection[0][0], viewProjection[1][0], viewProjection[2][0],
                                      viewProjection[3][0]);
@@ -172,22 +184,6 @@ static void extractFrustumPlanes(const glm::mat4& viewProjection, glm::vec4* out
         const float length = glm::length(glm::vec3(outPlanes[i]));
         outPlanes[i] /= length;
     }
-}
-
-void fillCameraUniform(const Camera& camera, float aspectRatio, uint32_t instanceCount, float boundsRadius,
-                       uint32_t lightCount, CameraUniform& outUniform)
-{
-    const glm::vec3 forward = cameraForward(camera);
-    outUniform.view = glm::lookAt(camera.position, camera.position + forward, glm::vec3(0.0f, 1.0f, 0.0f));
-    outUniform.projection =
-        glm::perspective(camera.verticalFieldOfView, aspectRatio, camera.nearPlane, camera.farPlane);
-    // Vulkan 的裁剪空间 Y 轴朝下
-    outUniform.projection[1][1] *= -1.0f;
-    outUniform.viewProjection = outUniform.projection * outUniform.view;
-    outUniform.cameraPosition = glm::vec4(camera.position, 1.0f);
-    extractFrustumPlanes(outUniform.viewProjection, outUniform.frustumPlanes);
-    outUniform.cullParams = glm::vec4(static_cast<float>(instanceCount), boundsRadius,
-                                      static_cast<float>(lightCount), 0.0f);
 }
 
 uint32_t cullInstancesOnCpu(const std::vector<InstanceData>& instances, uint32_t instanceCount,

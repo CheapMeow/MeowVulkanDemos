@@ -11,49 +11,17 @@ double nowSeconds()
     return elapsed.count();
 }
 
-const char* timingDisplayName(TimingId id)
-{
-    static const char* const names[TIMING_ID_COUNT] = {
-        "帧时间",
-        "主机剔除",
-        "记录：命令缓冲起始",
-        "记录：剔除计算调度",
-        "记录：G-Buffer 通道",
-        "记录：光照通道",
-        "记录：界面绘制",
-        "记录：抓帧拷贝",
-        "记录：提交命令",
-        "设备时间",
-    };
-    return names[id];
-}
-
-const char* timingReportColumnName(TimingId id)
-{
-    static const char* const names[TIMING_ID_COUNT] = {
-        "frame_ms",
-        "cpu_cull_ms",
-        "cpu_record_begin_ms",
-        "cpu_record_cull_dispatch_ms",
-        "cpu_record_gbuffer_pass_ms",
-        "cpu_record_lighting_pass_ms",
-        "cpu_record_ui_ms",
-        "cpu_record_capture_ms",
-        "cpu_record_submit_ms",
-        "gpu_ms",
-    };
-    return names[id];
-}
-
-void initTimingStore(TimingStore& store, double startTime)
+void initTimingStore(TimingStore& store, const TimingItemDescription* items, int itemCount, double startTime)
 {
     store = TimingStore();
+    store.items = items;
+    store.itemCount = itemCount;
     store.startTime = startTime;
 }
 
 void resetTimingWindows(TimingStore& store)
 {
-    for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+    for (int i = 0; i < store.itemCount; ++i) {
         store.window[i] = TimingWindow();
     }
     store.windowCursor = 0;
@@ -61,7 +29,7 @@ void resetTimingWindows(TimingStore& store)
 
 void resetTimingReport(TimingStore& store)
 {
-    for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+    for (int i = 0; i < store.itemCount; ++i) {
         store.report[i] = TimingReportAccumulator();
     }
 }
@@ -111,31 +79,62 @@ double timingReportStandardDeviation(const TimingReportAccumulator& accumulator)
     return std::sqrt(variance);
 }
 
-std::string timingReportLine(const char* pathName, uint32_t instances, uint32_t visibleInstances,
-                             uint32_t drawCommands, const TimingStore& store)
+std::string timingReportHeaderColumns(const TimingStore& store)
 {
-    char prefix[128];
-    const int prefixLength =
-        std::snprintf(prefix, sizeof(prefix), "%s,%u,%u,%u", pathName, instances, visibleInstances, drawCommands);
-    std::string line(prefix, static_cast<size_t>(prefixLength));
-    for (int i = 0; i < TIMING_ID_COUNT; ++i) {
-        const TimingReportAccumulator& accumulator = store.report[i];
-        char numbers[64];
-        const int numberLength =
-            std::snprintf(numbers, sizeof(numbers), ",%.3f,%.3f", accumulator.mean,
-                          timingReportStandardDeviation(accumulator));
-        line.append(numbers, static_cast<size_t>(numberLength));
+    std::string columns;
+    for (int i = 0; i < store.itemCount; ++i) {
+        columns.append(",");
+        columns.append(store.items[i].reportColumn);
+        columns.append("_avg,");
+        columns.append(store.items[i].reportColumn);
+        columns.append("_stddev");
     }
-    return line;
+    return columns;
+}
+
+std::string timingReportValueColumns(const TimingStore& store)
+{
+    std::string columns;
+    for (int i = 0; i < store.itemCount; ++i) {
+        const TimingReportAccumulator& accumulator = store.report[i];
+        char numbers[48];
+        const int numberLength = std::snprintf(numbers, sizeof(numbers), ",%.3f,%.3f", accumulator.mean,
+                                               timingReportStandardDeviation(accumulator));
+        columns.append(numbers, static_cast<size_t>(numberLength));
+    }
+    return columns;
+}
+
+void appendMeasurementReport(const std::string& path, const std::string& headerColumns,
+                             const std::string& valueColumns)
+{
+    std::FILE* probeFile = std::fopen(path.c_str(), "rb");
+    bool needsHeader = true;
+    if (probeFile != nullptr) {
+        std::fseek(probeFile, 0, SEEK_END);
+        needsHeader = std::ftell(probeFile) == 0;
+        std::fclose(probeFile);
+    }
+
+    std::FILE* reportFile = std::fopen(path.c_str(), "a");
+    if (reportFile == nullptr) {
+        std::fprintf(stderr, "fatal error: failed to open measurement report file: %s\n", path.c_str());
+        std::abort();
+    }
+    if (needsHeader) {
+        std::fprintf(reportFile, "%s\n", headerColumns.c_str());
+    }
+    std::fprintf(reportFile, "%s\n", valueColumns.c_str());
+    std::fclose(reportFile);
 }
 
 void recordFrameTimingSamples(TimingStore& store, double currentTime, bool includeInReport,
-                              const double values[TIMING_ID_COUNT])
+                              const double* values)
 {
     const float elapsedSeconds = static_cast<float>(currentTime - store.startTime);
     store.historyTimeSeconds.push_back(elapsedSeconds);
 
-    for (int i = 0; i < TIMING_ID_COUNT; ++i) {
+    for (int i = 0; i < store.itemCount; ++i) {
         const double value = values[i];
 
         store.historyValues[i].push_back(static_cast<float>(value));

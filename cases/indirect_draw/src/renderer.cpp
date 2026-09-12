@@ -9,6 +9,20 @@
 #include <cstring>
 #include <vector>
 
+void fillCameraUniform(const Camera& camera, float aspectRatio, uint32_t instanceCount, float boundsRadius,
+                       uint32_t lightCount, CameraUniform& outUniform)
+{
+    CameraMatrices matrices;
+    fillCameraMatrices(camera, aspectRatio, matrices);
+    outUniform.view = matrices.view;
+    outUniform.projection = matrices.projection;
+    outUniform.viewProjection = matrices.viewProjection;
+    outUniform.cameraPosition = matrices.cameraPosition;
+    extractFrustumPlanes(outUniform.viewProjection, outUniform.frustumPlanes);
+    outUniform.cullParams = glm::vec4(static_cast<float>(instanceCount), boundsRadius,
+                                      static_cast<float>(lightCount), 0.0f);
+}
+
 const char* drawPathName(DrawPath drawPath)
 {
     if (drawPath == DRAW_PATH_TRADITIONAL) {

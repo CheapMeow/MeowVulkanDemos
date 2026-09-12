@@ -1,4 +1,5 @@
 #include "asset_file.h"
+#include "case_ui.h"
 #include "console.h"
 #include "control_server.h"
 #include "frame_capture.h"
@@ -7,6 +8,7 @@
 #include "renderer.h"
 #include "scene.h"
 #include "timing.h"
+#include "timing_items.h"
 #include "user_interface.h"
 #include "vk_check.h"
 #include "vk_context.h"
@@ -17,6 +19,18 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+// 报告里 case 自己的前几列
+static const char* const REPORT_HEADER_COLUMNS = "draw_path,instances,visible_instances,draw_commands";
+
+static std::string indirectReportPrefix(DrawPath drawPath, uint32_t instances, uint32_t visibleInstances,
+                                        uint32_t drawCommands)
+{
+    char prefix[128];
+    std::snprintf(prefix, sizeof(prefix), "%s,%u,%u,%u", drawPathName(drawPath), instances, visibleInstances,
+                  drawCommands);
+    return std::string(prefix);
+}
 
 // 交换链以及所有跟它的尺寸、图像数量绑定的资源都要在窗口尺寸变化后重建。
 // 抓帧缓冲的大小也由交换链尺寸决定，抓帧还没发生时一并重建
@@ -32,33 +46,6 @@ static void rebuildSwapchainResources(VulkanContext& ctx, Renderer& renderer, Gp
         }
         createCaptureBuffer(ctx, captureBuffer);
     }
-}
-
-// 把一行数据追加到报告文件，文件为空时先写一行表头
-static void appendReportLine(const std::string& reportPath, const std::string& line)
-{
-    std::FILE* probeFile = std::fopen(reportPath.c_str(), "rb");
-    bool needsHeader = true;
-    if (probeFile != nullptr) {
-        std::fseek(probeFile, 0, SEEK_END);
-        needsHeader = std::ftell(probeFile) == 0;
-        std::fclose(probeFile);
-    }
-
-    std::FILE* reportFile = std::fopen(reportPath.c_str(), "a");
-    if (reportFile == nullptr) {
-        FATAL("failed to open measurement report file: %s", reportPath.c_str());
-    }
-    if (needsHeader) {
-        std::fprintf(reportFile, "draw_path,instances,visible_instances,draw_commands");
-        for (int i = 0; i < TIMING_ID_COUNT; ++i) {
-            const char* columnName = timingReportColumnName(static_cast<TimingId>(i));
-            std::fprintf(reportFile, ",%s_avg,%s_stddev", columnName, columnName);
-        }
-        std::fprintf(reportFile, "\n");
-    }
-    std::fprintf(reportFile, "%s\n", line.c_str());
-    std::fclose(reportFile);
 }
 
 int main(int argc, char** argv)
@@ -176,7 +163,9 @@ int main(int argc, char** argv)
     createRenderer(ctx, renderer, mesh, instances, lightCapacity);
 
     UserInterface ui = {};
-    createUserInterface(ctx, renderer, ui);
+    int caseTextCount = 0;
+    const char* const* caseTexts = caseInterfaceTexts(caseTextCount);
+    createUserInterface(ctx, renderer.lightingRenderPass, caseTexts, caseTextCount, ui);
 
     Camera camera;
     initCamera(camera, instances);
@@ -198,7 +187,9 @@ int main(int argc, char** argv)
     const double startTime = previousTime;
 
     TimingStore timingStore;
-    initTimingStore(timingStore, startTime);
+    initTimingStore(timingStore, caseTimingItems(), TIMING_ID_COUNT, startTime);
+    const std::string reportHeaderColumns =
+        std::string(REPORT_HEADER_COLUMNS) + timingReportHeaderColumns(timingStore);
 
     bool spaceWasPressed = false;
     double lastSwitchTime = previousTime;
@@ -288,11 +279,12 @@ int main(int argc, char** argv)
             if (timingStore.report[TIMING_FRAME].sampleCount == 0) {
                 return "err: segment had no sampled frames";
             }
-            const std::string line = timingReportLine(
-                drawPathName(uiState.drawPath), static_cast<uint32_t>(uiState.activeInstanceCount),
-                reportVisibleCount, reportDrawCallCount, timingStore);
+            const std::string line =
+                indirectReportPrefix(uiState.drawPath, static_cast<uint32_t>(uiState.activeInstanceCount),
+                                     reportVisibleCount, reportDrawCallCount) +
+                timingReportValueColumns(timingStore);
             if (!reportPath.empty()) {
-                appendReportLine(reportPath, line);
+                appendMeasurementReport(reportPath, reportHeaderColumns, line);
             }
             segmentActive = false;
             resetTimingReport(timingStore);
@@ -461,14 +453,13 @@ int main(int argc, char** argv)
             std::printf("%s | instances %u | visible %u | draw commands %u\n", drawPathName(uiState.drawPath),
                         activeInstanceCount, uiStatistics.visibleInstanceCount, uiStatistics.drawCallCount);
             for (int i = 0; i < TIMING_ID_COUNT; ++i) {
-                const TimingId id = static_cast<TimingId>(i);
-                const TimingWindow& window = timingStore.window[id];
-                if (id == TIMING_FRAME) {
+                const TimingWindow& window = timingStore.window[i];
+                if (i == TIMING_FRAME) {
                     const double fps = window.mean > 0.0 ? 1000.0 / window.mean : 0.0;
-                    std::printf("  %-30s %7.3f +/- %6.3f ms (%.0f FPS)\n", timingReportColumnName(id), window.mean,
-                                window.standardDeviation, fps);
+                    std::printf("  %-30s %7.3f +/- %6.3f ms (%.0f FPS)\n",
+                                timingStore.items[i].reportColumn, window.mean, window.standardDeviation, fps);
                 } else {
-                    std::printf("  %-30s %7.3f +/- %6.3f ms\n", timingReportColumnName(id), window.mean,
+                    std::printf("  %-30s %7.3f +/- %6.3f ms\n", timingStore.items[i].reportColumn, window.mean,
                                 window.standardDeviation);
                 }
             }
@@ -500,10 +491,11 @@ int main(int argc, char** argv)
         if (timingStore.report[TIMING_FRAME].sampleCount == 0) {
             FATAL("no frame was sampled in the measurement window, set --auto-exit longer than the warm-up time");
         }
-        const std::string line = timingReportLine(drawPathName(uiState.drawPath),
-                                                 static_cast<uint32_t>(uiState.activeInstanceCount),
-                                                 reportVisibleCount, reportDrawCallCount, timingStore);
-        appendReportLine(reportPath, line);
+        const std::string line =
+            indirectReportPrefix(uiState.drawPath, static_cast<uint32_t>(uiState.activeInstanceCount),
+                                 reportVisibleCount, reportDrawCallCount) +
+            timingReportValueColumns(timingStore);
+        appendMeasurementReport(reportPath, reportHeaderColumns, line);
     }
 
     destroyUserInterface(ctx, ui);

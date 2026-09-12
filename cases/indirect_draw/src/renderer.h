@@ -8,6 +8,20 @@
 
 enum { MAX_FRAMES_IN_FLIGHT = 2 };
 
+// 与着色器中的 CameraBuffer 逐字节对应。前四个字段是与 case 无关的相机矩阵，
+// 后面的视锥平面与剔除参数供本 case 的剔除使用
+struct CameraUniform {
+    glm::mat4 view;
+    glm::mat4 projection;
+    glm::mat4 viewProjection;
+    glm::vec4 cameraPosition;
+    glm::vec4 frustumPlanes[6];  // xyz 法线, w 常数项, 指向视锥内部为正
+    glm::vec4 cullParams;        // x 实例总数, y 模型包围球半径, z 光源数量, w 保留
+};
+
+void fillCameraUniform(const Camera& camera, float aspectRatio, uint32_t instanceCount, float boundsRadius,
+                       uint32_t lightCount, CameraUniform& outUniform);
+
 // 绘制路径。三条路径共用同一份着色器与同一套剔除判据，差异只在几何的提交方式
 enum DrawPath {
     DRAW_PATH_TRADITIONAL = 0,  // 主机剔除 + 逐可见实例一条 vkCmdDrawIndexed

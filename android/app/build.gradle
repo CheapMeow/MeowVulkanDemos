@@ -2,13 +2,17 @@ plugins {
     id "com.android.application"
 }
 
+// 一次只打包一个 case，用 -PdemoCase=<名字> 选择，默认 indirect_draw。
+// CMake 侧通过 -DDEMO_CASE 收到同一个名字
+def demoCase = project.findProperty("demoCase") ?: "indirect_draw"
+
 android {
-    namespace "com.example.vulkanindirectdrawdemo"
+    namespace "com.example.meowvulkandemos"
     compileSdk 35
     ndkVersion "27.0.12077973"
 
     defaultConfig {
-        applicationId "com.example.vulkanindirectdrawdemo"
+        applicationId "com.example.meowvulkandemos"
         // Vulkan 1.0 从 API 24 起才有，最低版本与 Vulkan 对齐
         minSdk 24
         targetSdk 35
@@ -18,7 +22,7 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags "-std=c++17"
-                arguments "-DANDROID_STL=c++_static"
+                arguments "-DANDROID_STL=c++_static", "-DDEMO_CASE=${demoCase}"
             }
         }
         ndk {

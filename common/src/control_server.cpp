@@ -2,7 +2,7 @@
 
 #ifdef __ANDROID__
 #include <android/log.h>
-#define CS_LOG(...) __android_log_print(ANDROID_LOG_INFO, "VulkanIndirectDrawDemo", __VA_ARGS__)
+#define CS_LOG(...) __android_log_print(ANDROID_LOG_INFO, "MeowVulkanDemo", __VA_ARGS__)
 #else
 #define CS_LOG(...) std::fprintf(stderr, __VA_ARGS__)
 #endif

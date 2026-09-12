@@ -15,39 +15,11 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <vector>
 
-// 界面上的全部文本。字体字形范围、启动校验与界面绘制都以这份定义为唯一来源，
-// 任何一条文本改动都会同时反映到字形范围里，不会出现缺字形显示成问号的情况
-static const char* const TEXT_PANEL_TITLE = "Vulkan Indirect Draw 对比";
-
-static const char* const TEXT_SECTION_PATH = "绘制路径";
-static const char* const TEXT_PATH_TRADITIONAL = "逐实例 drawIndexed（主机剔除，每个可见实例一条命令）";
-static const char* const TEXT_PATH_INSTANCED = "实例化 drawIndexed（主机剔除，一条命令）";
-static const char* const TEXT_PATH_INDIRECT = "indirect（计算着色器剔除，一条命令）";
-
-static const char* const TEXT_SECTION_SCENE = "场景";
-static const char* const TEXT_INSTANCE_COUNT = "实例数量";
-static const char* const TEXT_LIGHT_COUNT = "光源数量";
-static const char* const TEXT_FAR_PLANE = "远裁剪面";
-static const char* const TEXT_MOVE_SPEED = "移动速度";
-
+// 公共面板上的全部文本。所有这些字符串都会进入字形范围，改动一处即生效
 static const char* const TEXT_SECTION_TIMING = "本帧耗时";
 static const char* const TEXT_TIMING_HINT = "以下每一项均为最近 100 帧滑动窗口内的均值与标准差，下方曲线画出最近 10 秒，横轴为启动以来的秒数，纵轴单位为毫秒，上下限取这段时间内帧的最小值与最大值再各留一成余量";
-
-// 曲线上画出最近多少秒的数据，横轴范围与纵轴上下限都取自这一批数据
-static const float TIMING_PLOT_VISIBLE_SECONDS = 10.0f;
-
-static const char* const TEXT_SECTION_WORKLOAD = "本帧工作量";
-static const char* const TEXT_TOTAL_INSTANCES = "实例总数 %d";
-static const char* const TEXT_VISIBLE_INSTANCES = "可见实例 %u";
-static const char* const TEXT_DRAW_COMMANDS = "绘制命令 %u 条";
-
-static const char* const TEXT_SECTION_GUIDE = "操作指南";
-static const char* const TEXT_GUIDE_MOVE = "W A S D 前后左右移动，Q 下降，E 上升";
-static const char* const TEXT_GUIDE_LOOK = "方向键转动视角，按住左 Shift 加速四倍";
-static const char* const TEXT_GUIDE_SWITCH = "空格键依次切换三条绘制路径，效果与上面的单选按钮相同";
-static const char* const TEXT_GUIDE_QUIT = "Esc 退出程序";
-static const char* const TEXT_GUIDE_DRAG = "拖动标题栏可以移动本面板";
 
 static const char* const TEXT_SECTION_GPU_LOCK = "GPU 锁频";
 static const char* const TEXT_GPU_NOT_DETECTED = "未探测到支持锁频的 NVIDIA 显卡：%s";
@@ -71,40 +43,37 @@ static const char* const TEXT_GPU_NOT_LOCKED_STATUS = "未锁定，自动调频"
 static const char* const TEXT_GPU_LOCK_FAILED = "锁频失败，消费级显卡常见拒绝 -lgc/-lmc，或者需要以管理员身份运行本程序：%s";
 static const char* const TEXT_GPU_UNLOCK_FAILED = "解锁失败：%s";
 
-static const char* const TEXT_EXPLANATION =
-    "三条路径共用同一份着色器与同一套剔除判据，画面完全一致。"
-    "把实例数量或者远裁剪面调大，观察主机剔除与主机记录命令这两项的变化，"
-    "设备时间在三条路径上保持一致。";
-
-static const char* const ALL_INTERFACE_TEXTS[] = {
-    TEXT_PANEL_TITLE,         TEXT_SECTION_PATH,        TEXT_PATH_TRADITIONAL,      TEXT_PATH_INSTANCED,
-    TEXT_PATH_INDIRECT,       TEXT_SECTION_SCENE,       TEXT_INSTANCE_COUNT,        TEXT_LIGHT_COUNT,
-    TEXT_FAR_PLANE,           TEXT_MOVE_SPEED,          TEXT_SECTION_TIMING,        TEXT_TIMING_HINT,
-    TEXT_SECTION_WORKLOAD,    TEXT_TOTAL_INSTANCES,
-    TEXT_VISIBLE_INSTANCES,   TEXT_DRAW_COMMANDS,       TEXT_SECTION_GUIDE,         TEXT_GUIDE_MOVE,
-    TEXT_GUIDE_LOOK,          TEXT_GUIDE_SWITCH,        TEXT_GUIDE_QUIT,            TEXT_GUIDE_DRAG,
-    TEXT_EXPLANATION,
-    TEXT_SECTION_GPU_LOCK,    TEXT_GPU_NOT_DETECTED,    TEXT_GPU_DEVICE_NAME,       TEXT_GPU_CURRENT_CLOCKS,
-    TEXT_GPU_TARGET_CORE,     TEXT_GPU_TARGET_MEMORY,   TEXT_GPU_LOCK_BUTTON,       TEXT_GPU_UNLOCK_BUTTON,
-    TEXT_GPU_LOCKED_STATUS,   TEXT_GPU_NOT_LOCKED_STATUS, TEXT_GPU_LOCK_FAILED,     TEXT_GPU_UNLOCK_FAILED,
-    TEXT_GPU_QUERY_BUTTON,    TEXT_GPU_CLOCKS_NOT_QUERIED, TEXT_GPU_QUERY_FAILED,
-    TEXT_GPU_CORE_CLOCK_PLOT, TEXT_GPU_MEMORY_CLOCK_PLOT,  TEXT_GPU_CLOCK_PLOT_HINT,
-    timingDisplayName(TIMING_FRAME),
-    timingDisplayName(TIMING_CPU_CULL),
-    timingDisplayName(TIMING_CPU_RECORD_BEGIN),
-    timingDisplayName(TIMING_CPU_RECORD_CULL_DISPATCH),
-    timingDisplayName(TIMING_CPU_RECORD_GBUFFER_PASS),
-    timingDisplayName(TIMING_CPU_RECORD_LIGHTING_PASS),
-    timingDisplayName(TIMING_CPU_RECORD_UI),
-    timingDisplayName(TIMING_CPU_RECORD_CAPTURE),
-    timingDisplayName(TIMING_CPU_RECORD_SUBMIT),
-    timingDisplayName(TIMING_GPU_TOTAL),
+static const char* const COMMON_INTERFACE_TEXTS[] = {
+    TEXT_SECTION_TIMING,
+    TEXT_TIMING_HINT,
+    TEXT_SECTION_GPU_LOCK,
+    TEXT_GPU_NOT_DETECTED,
+    TEXT_GPU_DEVICE_NAME,
+    TEXT_GPU_QUERY_BUTTON,
+    TEXT_GPU_CURRENT_CLOCKS,
+    TEXT_GPU_CLOCKS_NOT_QUERIED,
+    TEXT_GPU_QUERY_FAILED,
+    TEXT_GPU_CORE_CLOCK_PLOT,
+    TEXT_GPU_MEMORY_CLOCK_PLOT,
+    TEXT_GPU_CLOCK_PLOT_HINT,
+    TEXT_GPU_TARGET_CORE,
+    TEXT_GPU_TARGET_MEMORY,
+    TEXT_GPU_LOCK_BUTTON,
+    TEXT_GPU_UNLOCK_BUTTON,
+    TEXT_GPU_LOCKED_STATUS,
+    TEXT_GPU_NOT_LOCKED_STATUS,
+    TEXT_GPU_LOCK_FAILED,
+    TEXT_GPU_UNLOCK_FAILED,
 };
 
-enum { INTERFACE_TEXT_COUNT = sizeof(ALL_INTERFACE_TEXTS) / sizeof(ALL_INTERFACE_TEXTS[0]) };
+enum { COMMON_INTERFACE_TEXT_COUNT = sizeof(COMMON_INTERFACE_TEXTS) / sizeof(COMMON_INTERFACE_TEXTS[0]) };
+
+// 曲线上画出最近多少秒的数据，横轴范围与纵轴上下限都取自这一批数据
+static const float TIMING_PLOT_VISIBLE_SECONDS = 10.0f;
 
 // 字形范围需要在字体图集构建期间保持有效
 static ImVector<ImWchar> gGlyphRanges;
+static std::vector<const char*> gAllInterfaceTexts;
 
 static void checkImGuiResult(VkResult result)
 {
@@ -124,8 +93,8 @@ static GlyphUsage verifyGlyphsPresent(ImFont* font)
 {
     GlyphUsage usage = {};
 
-    for (int i = 0; i < INTERFACE_TEXT_COUNT; ++i) {
-        const char* cursor = ALL_INTERFACE_TEXTS[i];
+    for (const char* text : gAllInterfaceTexts) {
+        const char* cursor = text;
         while (*cursor != '\0') {
             unsigned int codepoint = 0;
             const int consumedBytes = ImTextCharFromUtf8(&codepoint, cursor, nullptr);
@@ -150,7 +119,8 @@ static GlyphUsage verifyGlyphsPresent(ImFont* font)
     return usage;
 }
 
-void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, UserInterface& ui)
+void createUserInterface(const VulkanContext& ctx, VkRenderPass renderPass, const char* const* caseTexts,
+                         int caseTextCount, UserInterface& ui)
 {
     // 界面只需要采样字体图集，一个组合图像采样器就够
     VkDescriptorPoolSize poolSize = {};
@@ -172,11 +142,21 @@ void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, Use
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
 
+    // 全部需要字形的文本：公共面板的与 case 自己的合在一起
+    gAllInterfaceTexts.clear();
+    gAllInterfaceTexts.reserve(COMMON_INTERFACE_TEXT_COUNT + caseTextCount);
+    for (int i = 0; i < COMMON_INTERFACE_TEXT_COUNT; ++i) {
+        gAllInterfaceTexts.push_back(COMMON_INTERFACE_TEXTS[i]);
+    }
+    for (int i = 0; i < caseTextCount; ++i) {
+        gAllInterfaceTexts.push_back(caseTexts[i]);
+    }
+
     // 默认字体没有汉字，使用系统自带的微软雅黑，字形范围由界面文本本身决定
     ImFontGlyphRangesBuilder rangesBuilder;
     rangesBuilder.AddRanges(io.Fonts->GetGlyphRangesDefault());
-    for (int i = 0; i < INTERFACE_TEXT_COUNT; ++i) {
-        rangesBuilder.AddText(ALL_INTERFACE_TEXTS[i]);
+    for (const char* text : gAllInterfaceTexts) {
+        rangesBuilder.AddText(text);
     }
     rangesBuilder.BuildRanges(&gGlyphRanges);
 
@@ -225,7 +205,7 @@ void createUserInterface(const VulkanContext& ctx, const Renderer& renderer, Use
     initInfo.QueueFamily = ctx.queueFamilyIndex;
     initInfo.Queue = ctx.queue;
     initInfo.DescriptorPool = ui.descriptorPool;
-    initInfo.RenderPass = renderer.lightingRenderPass;
+    initInfo.RenderPass = renderPass;
     initInfo.MinImageCount = 2;
     initInfo.ImageCount = ctx.swapchainImageCount;
     initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
@@ -305,153 +285,120 @@ static void plotRecentSeries(const char* name, const std::vector<float>& times,
     ImGui::PopID();
 }
 
-void buildUserInterface(UiState& state, const UiStatistics& statistics, const TimingStore& timing,
-                        int maxInstanceCount, int maxLightCount, GpuClockLockState& gpuClockLockState,
-                        GpuClockMonitor& gpuClockMonitor)
+void buildGpuClockPanel(GpuClockLockState& gpuClockLockState, GpuClockMonitor& gpuClockMonitor)
 {
-    ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(520.0f, 860.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin(TEXT_PANEL_TITLE);
-
-    ImGui::SeparatorText(TEXT_SECTION_PATH);
-    int selectedPath = static_cast<int>(state.drawPath);
-    ImGui::RadioButton(TEXT_PATH_TRADITIONAL, &selectedPath, DRAW_PATH_TRADITIONAL);
-    ImGui::RadioButton(TEXT_PATH_INSTANCED, &selectedPath, DRAW_PATH_INSTANCED);
-    ImGui::RadioButton(TEXT_PATH_INDIRECT, &selectedPath, DRAW_PATH_INDIRECT);
-    state.drawPath = static_cast<DrawPath>(selectedPath);
-
-    ImGui::SeparatorText(TEXT_SECTION_SCENE);
-    ImGui::SliderInt(TEXT_INSTANCE_COUNT, &state.activeInstanceCount, 1, maxInstanceCount, "%d",
-                     ImGuiSliderFlags_Logarithmic);
-    ImGui::SliderInt(TEXT_LIGHT_COUNT, &state.activeLightCount, 1, maxLightCount);
-    ImGui::SliderFloat(TEXT_FAR_PLANE, &state.farPlane, 40.0f, 900.0f, "%.0f");
-    ImGui::SliderFloat(TEXT_MOVE_SPEED, &state.cameraMoveSpeed, 5.0f, 400.0f, "%.0f");
-
     ImGui::SeparatorText(TEXT_SECTION_GPU_LOCK);
     if (!gpuClockLockState.detected) {
         ImGui::TextWrapped(TEXT_GPU_NOT_DETECTED, gpuClockLockState.lastActionDetail.c_str());
-    } else {
-        ImGui::Text(TEXT_GPU_DEVICE_NAME, gpuClockLockState.gpuName.c_str(), gpuClockLockState.gpuIndex);
-
-        if (ImGui::Button(TEXT_GPU_QUERY_BUTTON)) {
-            queryLiveGpuClocks(gpuClockLockState);
-        }
-        if (gpuClockLockState.clocksQueried) {
-            ImGui::Text(TEXT_GPU_CURRENT_CLOCKS, gpuClockLockState.currentCoreClockMHz,
-                        gpuClockLockState.currentMemoryClockMHz);
-        } else if (gpuClockLockState.lastAction == GpuClockLockAction::kQueryFailed) {
-            ImGui::TextWrapped(TEXT_GPU_QUERY_FAILED, gpuClockLockState.lastActionDetail.c_str());
-        } else {
-            ImGui::TextWrapped(TEXT_GPU_CLOCKS_NOT_QUERIED);
-        }
-
-        char comboLabel[32];
-
-        ImGui::BeginDisabled(gpuClockLockState.locked);
-
-        std::snprintf(comboLabel, sizeof(comboLabel), "%u MHz",
-                      gpuClockLockState.supportedCoreClocksMHz[gpuClockLockState.selectedCoreClockIndex]);
-        if (ImGui::BeginCombo(TEXT_GPU_TARGET_CORE, comboLabel)) {
-            for (int i = 0; i < static_cast<int>(gpuClockLockState.supportedCoreClocksMHz.size()); ++i) {
-                const bool selected = i == gpuClockLockState.selectedCoreClockIndex;
-                char itemLabel[32];
-                std::snprintf(itemLabel, sizeof(itemLabel), "%u MHz", gpuClockLockState.supportedCoreClocksMHz[i]);
-                if (ImGui::Selectable(itemLabel, selected)) {
-                    gpuClockLockState.selectedCoreClockIndex = i;
-                }
-                if (selected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
-        }
-
-        std::snprintf(comboLabel, sizeof(comboLabel), "%u MHz",
-                      gpuClockLockState.supportedMemoryClocksMHz[gpuClockLockState.selectedMemoryClockIndex]);
-        if (ImGui::BeginCombo(TEXT_GPU_TARGET_MEMORY, comboLabel)) {
-            for (int i = 0; i < static_cast<int>(gpuClockLockState.supportedMemoryClocksMHz.size()); ++i) {
-                const bool selected = i == gpuClockLockState.selectedMemoryClockIndex;
-                char itemLabel[32];
-                std::snprintf(itemLabel, sizeof(itemLabel), "%u MHz",
-                             gpuClockLockState.supportedMemoryClocksMHz[i]);
-                if (ImGui::Selectable(itemLabel, selected)) {
-                    gpuClockLockState.selectedMemoryClockIndex = i;
-                }
-                if (selected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
-        }
-
-        if (ImGui::Button(TEXT_GPU_LOCK_BUTTON)) {
-            requestLockGpuClocks(gpuClockLockState);
-        }
-        ImGui::EndDisabled();
-
-        ImGui::SameLine();
-
-        ImGui::BeginDisabled(!gpuClockLockState.locked);
-        if (ImGui::Button(TEXT_GPU_UNLOCK_BUTTON)) {
-            requestUnlockGpuClocks(gpuClockLockState);
-        }
-        ImGui::EndDisabled();
-
-        if (gpuClockLockState.lastAction == GpuClockLockAction::kLockFailed) {
-            ImGui::TextWrapped(TEXT_GPU_LOCK_FAILED, gpuClockLockState.lastActionDetail.c_str());
-        } else if (gpuClockLockState.lastAction == GpuClockLockAction::kUnlockFailed) {
-            ImGui::TextWrapped(TEXT_GPU_UNLOCK_FAILED, gpuClockLockState.lastActionDetail.c_str());
-        } else if (gpuClockLockState.locked) {
-            ImGui::Text(TEXT_GPU_LOCKED_STATUS, gpuClockLockState.lockedCoreClockMHz,
-                        gpuClockLockState.lockedMemoryClockMHz);
-        } else {
-            ImGui::TextUnformatted(TEXT_GPU_NOT_LOCKED_STATUS);
-        }
-
-        ImGui::TextWrapped(TEXT_GPU_CLOCK_PLOT_HINT);
-        std::vector<float> clockTimeSeconds;
-        std::vector<float> coreClockMHz;
-        std::vector<float> memoryClockMHz;
-        copyGpuClockSamples(gpuClockMonitor, clockTimeSeconds, coreClockMHz, memoryClockMHz);
-        plotRecentSeries(TEXT_GPU_CORE_CLOCK_PLOT, clockTimeSeconds, coreClockMHz);
-        plotRecentSeries(TEXT_GPU_MEMORY_CLOCK_PLOT, clockTimeSeconds, memoryClockMHz);
+        return;
     }
 
+    ImGui::Text(TEXT_GPU_DEVICE_NAME, gpuClockLockState.gpuName.c_str(), gpuClockLockState.gpuIndex);
+
+    if (ImGui::Button(TEXT_GPU_QUERY_BUTTON)) {
+        queryLiveGpuClocks(gpuClockLockState);
+    }
+    if (gpuClockLockState.clocksQueried) {
+        ImGui::Text(TEXT_GPU_CURRENT_CLOCKS, gpuClockLockState.currentCoreClockMHz,
+                    gpuClockLockState.currentMemoryClockMHz);
+    } else if (gpuClockLockState.lastAction == GpuClockLockAction::kQueryFailed) {
+        ImGui::TextWrapped(TEXT_GPU_QUERY_FAILED, gpuClockLockState.lastActionDetail.c_str());
+    } else {
+        ImGui::TextWrapped(TEXT_GPU_CLOCKS_NOT_QUERIED);
+    }
+
+    char comboLabel[32];
+
+    ImGui::BeginDisabled(gpuClockLockState.locked);
+
+    std::snprintf(comboLabel, sizeof(comboLabel), "%u MHz",
+                  gpuClockLockState.supportedCoreClocksMHz[gpuClockLockState.selectedCoreClockIndex]);
+    if (ImGui::BeginCombo(TEXT_GPU_TARGET_CORE, comboLabel)) {
+        for (int i = 0; i < static_cast<int>(gpuClockLockState.supportedCoreClocksMHz.size()); ++i) {
+            const bool selected = i == gpuClockLockState.selectedCoreClockIndex;
+            char itemLabel[32];
+            std::snprintf(itemLabel, sizeof(itemLabel), "%u MHz", gpuClockLockState.supportedCoreClocksMHz[i]);
+            if (ImGui::Selectable(itemLabel, selected)) {
+                gpuClockLockState.selectedCoreClockIndex = i;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    std::snprintf(comboLabel, sizeof(comboLabel), "%u MHz",
+                  gpuClockLockState.supportedMemoryClocksMHz[gpuClockLockState.selectedMemoryClockIndex]);
+    if (ImGui::BeginCombo(TEXT_GPU_TARGET_MEMORY, comboLabel)) {
+        for (int i = 0; i < static_cast<int>(gpuClockLockState.supportedMemoryClocksMHz.size()); ++i) {
+            const bool selected = i == gpuClockLockState.selectedMemoryClockIndex;
+            char itemLabel[32];
+            std::snprintf(itemLabel, sizeof(itemLabel), "%u MHz",
+                          gpuClockLockState.supportedMemoryClocksMHz[i]);
+            if (ImGui::Selectable(itemLabel, selected)) {
+                gpuClockLockState.selectedMemoryClockIndex = i;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    if (ImGui::Button(TEXT_GPU_LOCK_BUTTON)) {
+        requestLockGpuClocks(gpuClockLockState);
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+
+    ImGui::BeginDisabled(!gpuClockLockState.locked);
+    if (ImGui::Button(TEXT_GPU_UNLOCK_BUTTON)) {
+        requestUnlockGpuClocks(gpuClockLockState);
+    }
+    ImGui::EndDisabled();
+
+    if (gpuClockLockState.lastAction == GpuClockLockAction::kLockFailed) {
+        ImGui::TextWrapped(TEXT_GPU_LOCK_FAILED, gpuClockLockState.lastActionDetail.c_str());
+    } else if (gpuClockLockState.lastAction == GpuClockLockAction::kUnlockFailed) {
+        ImGui::TextWrapped(TEXT_GPU_UNLOCK_FAILED, gpuClockLockState.lastActionDetail.c_str());
+    } else if (gpuClockLockState.locked) {
+        ImGui::Text(TEXT_GPU_LOCKED_STATUS, gpuClockLockState.lockedCoreClockMHz,
+                    gpuClockLockState.lockedMemoryClockMHz);
+    } else {
+        ImGui::TextUnformatted(TEXT_GPU_NOT_LOCKED_STATUS);
+    }
+
+    ImGui::TextWrapped(TEXT_GPU_CLOCK_PLOT_HINT);
+    std::vector<float> clockTimeSeconds;
+    std::vector<float> coreClockMHz;
+    std::vector<float> memoryClockMHz;
+    copyGpuClockSamples(gpuClockMonitor, clockTimeSeconds, coreClockMHz, memoryClockMHz);
+    plotRecentSeries(TEXT_GPU_CORE_CLOCK_PLOT, clockTimeSeconds, coreClockMHz);
+    plotRecentSeries(TEXT_GPU_MEMORY_CLOCK_PLOT, clockTimeSeconds, memoryClockMHz);
+}
+
+void buildTimingPanel(const TimingStore& timing)
+{
     ImGui::SeparatorText(TEXT_SECTION_TIMING);
     ImGui::TextWrapped("%s", TEXT_TIMING_HINT);
     ImGui::BeginChild("TimingScrollRegion", ImVec2(0.0f, 420.0f), ImGuiChildFlags_Border);
-    for (int i = 0; i < TIMING_ID_COUNT; ++i) {
-        const TimingId id = static_cast<TimingId>(i);
-        const TimingWindow& window = timing.window[id];
-        const char* name = timingDisplayName(id);
+    for (int i = 0; i < timing.itemCount; ++i) {
+        const TimingWindow& window = timing.window[i];
+        const char* name = timing.items[i].displayName;
 
-        if (id == TIMING_FRAME) {
+        if (i == 0) {
+            // 第一项固定是帧时间，额外显示由它换算出的帧率
             const double fps = window.mean > 0.0 ? 1000.0 / window.mean : 0.0;
             ImGui::Text("%s   %7.3f ± %6.3f ms   (%.0f FPS)", name, window.mean, window.standardDeviation, fps);
         } else {
             ImGui::Text("%s   %7.3f ± %6.3f ms", name, window.mean, window.standardDeviation);
         }
 
-        plotRecentSeries(name, timing.historyTimeSeconds, timing.historyValues[id]);
+        plotRecentSeries(name, timing.historyTimeSeconds, timing.historyValues[i]);
     }
     ImGui::EndChild();
-
-    ImGui::SeparatorText(TEXT_SECTION_WORKLOAD);
-    ImGui::Text(TEXT_TOTAL_INSTANCES, state.activeInstanceCount);
-    ImGui::Text(TEXT_VISIBLE_INSTANCES, statistics.visibleInstanceCount);
-    ImGui::Text(TEXT_DRAW_COMMANDS, statistics.drawCallCount);
-
-    ImGui::SeparatorText(TEXT_SECTION_GUIDE);
-    ImGui::BulletText(TEXT_GUIDE_MOVE);
-    ImGui::BulletText(TEXT_GUIDE_LOOK);
-    ImGui::BulletText(TEXT_GUIDE_SWITCH);
-    ImGui::BulletText(TEXT_GUIDE_QUIT);
-    ImGui::BulletText(TEXT_GUIDE_DRAG);
-
-    ImGui::Spacing();
-    ImGui::TextWrapped("%s", TEXT_EXPLANATION);
-
-    ImGui::End();
 }
 
 void endUserInterfaceFrame()
