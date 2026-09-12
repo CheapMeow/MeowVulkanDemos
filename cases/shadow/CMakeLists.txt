@@ -1,0 +1,21 @@
+# shadow case：方向光阴影贴图
+meow_add_case(shadow
+    SOURCES
+        src/renderer.cpp
+        src/scene_setup.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/scene.vert
+        shaders/scene.frag
+        shaders/shadow.vert
+        shaders/ground.frag
+    SHADER_INCLUDES
+        shaders/scene_common.glsl
+        shaders/shadow_sampling.glsl
+        shaders/lighting_common.glsl
+)
