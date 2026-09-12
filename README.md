@@ -13,6 +13,7 @@
 | [`cases/srgb_linear`](cases/srgb_linear/README.md) | sRGB 与线性空间，对比贴图解释方式、输出编码与色调映射，并附一条可对照理论值的参考条 |
 | [`cases/early_z`](cases/early_z/README.md) | early-Z、深度预通道与 discard，对比绘制顺序与预通道对设备时间的影响 |
 | [`cases/draw_cost`](cases/draw_cost/README.md) | 绘制命令的固定成本，对比状态排序、重复绑定与渲染通道段数 |
+| [`cases/shadow_extended`](cases/shadow_extended/README.md) | 级联阴影、PCSS 与矩阴影，对比级数、取值方式与坐标计算位置 |
 | [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
 
 ## 目录结构

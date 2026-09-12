@@ -1,0 +1,23 @@
+# shadow_extended case：级联阴影、PCSS、矩阴影与坐标计算位置
+meow_add_case(shadow_extended
+    SOURCES
+        src/renderer.cpp
+        src/scene_setup.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/scene.vert
+        shaders/scene.frag
+        shaders/shadow.vert
+        shaders/shadow_depth.frag
+        shaders/shadow_moments.frag
+        shaders/ground.frag
+    SHADER_INCLUDES
+        shaders/scene_common.glsl
+        shaders/shadow_sampling.glsl
+        shaders/lighting_common.glsl
+)
