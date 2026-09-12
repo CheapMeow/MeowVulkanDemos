@@ -314,54 +314,9 @@ static void createDescriptorPool(const VulkanContext& ctx, Renderer& renderer)
     VK_CHECK(vkCreateDescriptorPool(ctx.device, &poolInfo, nullptr, &renderer.descriptorPool));
 }
 
-static VkDescriptorSet allocateDescriptorSet(const VulkanContext& ctx, Renderer& renderer,
-                                             VkDescriptorSetLayout layout)
+static VkDescriptorSet allocateSet(const VulkanContext& ctx, Renderer& renderer, VkDescriptorSetLayout layout)
 {
-    VkDescriptorSetAllocateInfo allocInfo = {};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = renderer.descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &layout;
-
-    VkDescriptorSet set = VK_NULL_HANDLE;
-    VK_CHECK(vkAllocateDescriptorSets(ctx.device, &allocInfo, &set));
-    return set;
-}
-
-static void writeBufferDescriptor(const VulkanContext& ctx, VkDescriptorSet set, uint32_t binding,
-                                  VkDescriptorType type, const GpuBuffer& buffer)
-{
-    VkDescriptorBufferInfo bufferInfo = {};
-    bufferInfo.buffer = buffer.buffer;
-    bufferInfo.offset = 0;
-    bufferInfo.range = buffer.size;
-
-    VkWriteDescriptorSet write = {};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = set;
-    write.dstBinding = binding;
-    write.descriptorCount = 1;
-    write.descriptorType = type;
-    write.pBufferInfo = &bufferInfo;
-    vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
-}
-
-static void writeImageDescriptor(const VulkanContext& ctx, VkDescriptorSet set, uint32_t binding,
-                                 VkImageView view, VkSampler sampler)
-{
-    VkDescriptorImageInfo imageInfo = {};
-    imageInfo.sampler = sampler;
-    imageInfo.imageView = view;
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkWriteDescriptorSet write = {};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = set;
-    write.dstBinding = binding;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &imageInfo;
-    vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
+    return allocateDescriptorSet(ctx, renderer.descriptorPool, layout);
 }
 
 static void createGBufferPipeline(const VulkanContext& ctx, Renderer& renderer)
@@ -625,15 +580,7 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, renderer.instanceBuffer);
     uploadBufferData(ctx, renderer.instanceBuffer, instances.data(), instanceBytes);
 
-    createTextureFromMemory(ctx, readAssetBytes("backpack/diffuse.jpg"), true, renderer.material.albedo);
-    createTextureFromMemory(ctx, readAssetBytes("backpack/normal.png"), false, renderer.material.normal);
-    createTextureFromMemory(ctx, readAssetBytes("backpack/specular.jpg"), false,
-                            renderer.material.metallic);
-    createTextureFromMemory(ctx, readAssetBytes("backpack/roughness.jpg"), false,
-                            renderer.material.roughness);
-    createTextureFromMemory(ctx, readAssetBytes("backpack/ao.jpg"), false,
-                            renderer.material.ambientOcclusion);
-    renderer.material.sampler = createLinearSampler(ctx, renderer.material.albedo.mipLevels);
+    createBackpackMaterialTextures(ctx, renderer.material);
 
     createGBufferRenderPass(ctx, renderer);
     createLightingRenderPass(ctx, renderer);
@@ -649,7 +596,7 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
 
     renderer.timestampPeriodNanoseconds = ctx.physicalDeviceProperties.limits.timestampPeriod;
 
-    renderer.materialSet = allocateDescriptorSet(ctx, renderer, renderer.materialSetLayout);
+    renderer.materialSet = allocateSet(ctx, renderer, renderer.materialSetLayout);
     writeImageDescriptor(ctx, renderer.materialSet, 0, renderer.material.albedo.view, renderer.material.sampler);
     writeImageDescriptor(ctx, renderer.materialSet, 1, renderer.material.normal.view, renderer.material.sampler);
     writeImageDescriptor(ctx, renderer.materialSet, 2, renderer.material.metallic.view, renderer.material.sampler);
@@ -704,23 +651,23 @@ void createRenderer(const VulkanContext& ctx, Renderer& renderer, const MeshData
         initialCommand.firstInstance = 0;
         uploadBufferData(ctx, frame.indirectBuffer, &initialCommand, sizeof(initialCommand));
 
-        frame.sceneSet = allocateDescriptorSet(ctx, renderer, renderer.sceneSetLayout);
+        frame.sceneSet = allocateSet(ctx, renderer, renderer.sceneSetLayout);
         writeBufferDescriptor(ctx, frame.sceneSet, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frame.cameraBuffer);
         writeBufferDescriptor(ctx, frame.sceneSet, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, renderer.instanceBuffer);
 
-        frame.cpuVisibleSet = allocateDescriptorSet(ctx, renderer, renderer.visibleSetLayout);
+        frame.cpuVisibleSet = allocateSet(ctx, renderer, renderer.visibleSetLayout);
         writeBufferDescriptor(ctx, frame.cpuVisibleSet, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                               frame.cpuVisibleBuffer);
 
-        frame.gpuVisibleSet = allocateDescriptorSet(ctx, renderer, renderer.visibleSetLayout);
+        frame.gpuVisibleSet = allocateSet(ctx, renderer, renderer.visibleSetLayout);
         writeBufferDescriptor(ctx, frame.gpuVisibleSet, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                               frame.gpuVisibleBuffer);
 
-        frame.cullSet = allocateDescriptorSet(ctx, renderer, renderer.cullSetLayout);
+        frame.cullSet = allocateSet(ctx, renderer, renderer.cullSetLayout);
         writeBufferDescriptor(ctx, frame.cullSet, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.gpuVisibleBuffer);
         writeBufferDescriptor(ctx, frame.cullSet, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.indirectBuffer);
 
-        frame.lightingSet = allocateDescriptorSet(ctx, renderer, renderer.lightingSetLayout);
+        frame.lightingSet = allocateSet(ctx, renderer, renderer.lightingSetLayout);
         writeImageDescriptor(ctx, frame.lightingSet, 0, renderer.gbuffer.albedoOcclusion.view,
                              renderer.material.sampler);
         writeImageDescriptor(ctx, frame.lightingSet, 1, renderer.gbuffer.normalRoughness.view,
@@ -778,12 +725,7 @@ void destroyRenderer(const VulkanContext& ctx, Renderer& renderer)
     vkDestroyRenderPass(ctx.device, renderer.lightingRenderPass, nullptr);
     vkDestroyRenderPass(ctx.device, renderer.gbufferRenderPass, nullptr);
 
-    vkDestroySampler(ctx.device, renderer.material.sampler, nullptr);
-    destroyTexture(ctx, renderer.material.ambientOcclusion);
-    destroyTexture(ctx, renderer.material.roughness);
-    destroyTexture(ctx, renderer.material.metallic);
-    destroyTexture(ctx, renderer.material.normal);
-    destroyTexture(ctx, renderer.material.albedo);
+    destroyBackpackMaterialTextures(ctx, renderer.material);
 
     destroyBuffer(ctx, renderer.instanceBuffer);
     destroyBuffer(ctx, renderer.indexBuffer);

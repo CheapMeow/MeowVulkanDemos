@@ -1,5 +1,6 @@
 #include "vk_resources.h"
 
+#include "asset_file.h"
 #include "vk_check.h"
 
 #include <stb_image.h>
@@ -341,4 +342,74 @@ VkShaderModule loadShaderModuleFromMemory(const VulkanContext& ctx,
     VkShaderModule shaderModule = VK_NULL_HANDLE;
     VK_CHECK(vkCreateShaderModule(ctx.device, &moduleInfo, nullptr, &shaderModule));
     return shaderModule;
+}
+
+void createBackpackMaterialTextures(const VulkanContext& ctx, MaterialTextures& outMaterial)
+{
+    createTextureFromMemory(ctx, readAssetBytes("backpack/diffuse.jpg"), true, outMaterial.albedo);
+    createTextureFromMemory(ctx, readAssetBytes("backpack/normal.png"), false, outMaterial.normal);
+    createTextureFromMemory(ctx, readAssetBytes("backpack/specular.jpg"), false, outMaterial.metallic);
+    createTextureFromMemory(ctx, readAssetBytes("backpack/roughness.jpg"), false, outMaterial.roughness);
+    createTextureFromMemory(ctx, readAssetBytes("backpack/ao.jpg"), false, outMaterial.ambientOcclusion);
+    outMaterial.sampler = createLinearSampler(ctx, outMaterial.albedo.mipLevels);
+}
+
+void destroyBackpackMaterialTextures(const VulkanContext& ctx, MaterialTextures& material)
+{
+    vkDestroySampler(ctx.device, material.sampler, nullptr);
+    destroyTexture(ctx, material.ambientOcclusion);
+    destroyTexture(ctx, material.roughness);
+    destroyTexture(ctx, material.metallic);
+    destroyTexture(ctx, material.normal);
+    destroyTexture(ctx, material.albedo);
+}
+
+VkDescriptorSet allocateDescriptorSet(const VulkanContext& ctx, VkDescriptorPool pool,
+                                      VkDescriptorSetLayout layout)
+{
+    VkDescriptorSetAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = pool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &layout;
+
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VK_CHECK(vkAllocateDescriptorSets(ctx.device, &allocInfo, &set));
+    return set;
+}
+
+void writeBufferDescriptor(const VulkanContext& ctx, VkDescriptorSet set, uint32_t binding,
+                           VkDescriptorType type, const GpuBuffer& buffer)
+{
+    VkDescriptorBufferInfo bufferInfo = {};
+    bufferInfo.buffer = buffer.buffer;
+    bufferInfo.offset = 0;
+    bufferInfo.range = buffer.size;
+
+    VkWriteDescriptorSet write = {};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = set;
+    write.dstBinding = binding;
+    write.descriptorCount = 1;
+    write.descriptorType = type;
+    write.pBufferInfo = &bufferInfo;
+    vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
+}
+
+void writeImageDescriptor(const VulkanContext& ctx, VkDescriptorSet set, uint32_t binding, VkImageView view,
+                          VkSampler sampler)
+{
+    VkDescriptorImageInfo imageInfo = {};
+    imageInfo.sampler = sampler;
+    imageInfo.imageView = view;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write = {};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = set;
+    write.dstBinding = binding;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
 }

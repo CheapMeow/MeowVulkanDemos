@@ -42,15 +42,6 @@ struct GBufferTargets {
     VkFramebuffer framebuffer;
 };
 
-struct MaterialTextures {
-    GpuTexture albedo;
-    GpuTexture normal;
-    GpuTexture metallic;
-    GpuTexture roughness;
-    GpuTexture ambientOcclusion;
-    VkSampler sampler;
-};
-
 struct FrameResources {
     VkCommandBuffer commandBuffer;
     VkSemaphore imageAvailable;
