@@ -19,8 +19,16 @@ static const char* const TEXT_MOVE_SPEED = "移动速度";
 static const char* const TEXT_SECTION_LIGHT = "光源";
 static const char* const TEXT_LIGHT_YAW = "方位角";
 static const char* const TEXT_LIGHT_PITCH = "高度角";
-static const char* const TEXT_SHADOWS = "启用阴影";
-static const char* const TEXT_PCF = "PCF 软阴影";
+static const char* const TEXT_SHADOW_MODE = "阴影模式";
+static const char* const TEXT_PCF_RADIUS = "PCF 半径";
+static const char* const TEXT_PCSS_SEARCH_RADIUS = "遮挡物搜索半径";
+static const char* const TEXT_PCSS_LIGHT_RADIUS = "光源半径";
+static const char* const TEXT_PCSS_MIN_PENUMBRA = "最小半影";
+static const char* const TEXT_PCSS_MAX_PENUMBRA = "最大半影";
+
+// 阴影模式的三个取值，下标与 ShadowMode 一致
+static const char* const SHADOW_MODE_LABELS[] = { "关闭", "PCF", "PCSS" };
+enum { SHADOW_MODE_LABEL_COUNT = sizeof(SHADOW_MODE_LABELS) / sizeof(SHADOW_MODE_LABELS[0]) };
 
 static const char* const TEXT_SECTION_SHADOW_MAP = "阴影贴图";
 static const char* const TEXT_SHADOW_MAP_SIZE = "分辨率";
@@ -83,23 +91,28 @@ static const char* const TEXT_GUIDE_DRAG = "拖动标题栏可以移动本面板
 
 static const char* const TEXT_EXPLANATION =
     "阴影通道从光源方向把背面深度写进一张贴图，主通道把像素投影到同一张贴图上做深度比较。"
-    "关掉阴影后地面与物体的明暗不再被遮挡关系影响，打开 PCF 则改为在 3×3 范围内多次比较，"
-    "阴影边缘从硬边变成渐变。降低分辨率会让阴影边界变粗糙，降低深度值位数会让深度比较的"
-    "档位变少，阴影边界随之出现台阶。";
+    "关掉阴影后地面与物体的明暗不再被遮挡关系影响。PCF 在固定半径上多次比较，边缘从硬边变成渐变，"
+    "但这个半径不随遮挡物远近变化。PCSS 先用遮挡物搜索估出遮挡物的平均深度，再按接收点到遮挡物的"
+    "距离推算半影宽度，遮挡物越远半影越宽，最后在半影范围上做比较，接触处的阴影锐利、离得远的"
+    "阴影发散。降低分辨率会让阴影边界变粗糙，降低深度值位数会让深度比较的档位变少，阴影边界随之"
+    "出现台阶。";
 
 static const char* const CASE_INTERFACE_TEXTS[] = {
     TEXT_PANEL_TITLE,          TEXT_SECTION_SCENE,        TEXT_INSTANCE_COUNT,
     TEXT_MOVE_SPEED,           TEXT_SECTION_LIGHT,        TEXT_LIGHT_YAW,
-    TEXT_LIGHT_PITCH,          TEXT_SHADOWS,              TEXT_PCF,
-    TEXT_SECTION_SHADOW_MAP,   TEXT_SHADOW_MAP_SIZE,      TEXT_SHADOW_MAP_BITS,
-    SHADOW_MAP_SIZE_LABELS[0], SHADOW_MAP_SIZE_LABELS[1], SHADOW_MAP_SIZE_LABELS[2],
-    SHADOW_MAP_SIZE_LABELS[3], SHADOW_MAP_BITS_LABELS[0], SHADOW_MAP_BITS_LABELS[1],
-    SHADOW_MAP_BITS_LABELS[2], TEXT_SECTION_ARTIFACTS,     TEXT_BACK_FACE_DEPTH,
-    TEXT_NORMAL_LIFT,          TEXT_SLOPE_BIAS,           TEXT_DEPTH_OFFSET,
-    TEXT_GROUND_CASTER,        TEXT_ARTIFACT_HINT,        TEXT_GROUND_HINT,
-    TEXT_SECTION_WORKLOAD,     TEXT_DRAW_COMMANDS,        TEXT_SHADOW_MAP,
-    TEXT_SECTION_GUIDE,        TEXT_GUIDE_MOVE,           TEXT_GUIDE_LOOK,
-    TEXT_GUIDE_QUIT,           TEXT_GUIDE_DRAG,           TEXT_EXPLANATION,
+    TEXT_LIGHT_PITCH,          TEXT_SHADOW_MODE,          TEXT_PCF_RADIUS,
+    TEXT_PCSS_SEARCH_RADIUS,   TEXT_PCSS_LIGHT_RADIUS,    TEXT_PCSS_MIN_PENUMBRA,
+    TEXT_PCSS_MAX_PENUMBRA,    SHADOW_MODE_LABELS[0],     SHADOW_MODE_LABELS[1],
+    SHADOW_MODE_LABELS[2],     TEXT_SECTION_SHADOW_MAP,   TEXT_SHADOW_MAP_SIZE,
+    TEXT_SHADOW_MAP_BITS,      SHADOW_MAP_SIZE_LABELS[0], SHADOW_MAP_SIZE_LABELS[1],
+    SHADOW_MAP_SIZE_LABELS[2], SHADOW_MAP_SIZE_LABELS[3], SHADOW_MAP_BITS_LABELS[0],
+    SHADOW_MAP_BITS_LABELS[1], SHADOW_MAP_BITS_LABELS[2], TEXT_SECTION_ARTIFACTS,
+    TEXT_BACK_FACE_DEPTH,      TEXT_NORMAL_LIFT,          TEXT_SLOPE_BIAS,
+    TEXT_DEPTH_OFFSET,         TEXT_GROUND_CASTER,        TEXT_ARTIFACT_HINT,
+    TEXT_GROUND_HINT,          TEXT_SECTION_WORKLOAD,     TEXT_DRAW_COMMANDS,
+    TEXT_SHADOW_MAP,           TEXT_SECTION_GUIDE,        TEXT_GUIDE_MOVE,
+    TEXT_GUIDE_LOOK,           TEXT_GUIDE_QUIT,           TEXT_GUIDE_DRAG,
+    TEXT_EXPLANATION,
 };
 
 enum { CASE_INTERFACE_TEXT_COUNT = sizeof(CASE_INTERFACE_TEXTS) / sizeof(CASE_INTERFACE_TEXTS[0]) };
@@ -137,8 +150,23 @@ void buildUserInterface(UiState& state, const UiStatistics& statistics, const Ti
     ImGui::SeparatorText(TEXT_SECTION_LIGHT);
     ImGui::SliderFloat(TEXT_LIGHT_YAW, &state.lightYawDegrees, 0.0f, 360.0f, "%.0f 度");
     ImGui::SliderFloat(TEXT_LIGHT_PITCH, &state.lightPitchDegrees, 5.0f, 85.0f, "%.0f 度");
-    ImGui::Checkbox(TEXT_SHADOWS, &state.shadowsEnabled);
-    ImGui::Checkbox(TEXT_PCF, &state.pcfEnabled);
+
+    int modeIndex = static_cast<int>(state.shadowMode);
+    if (ImGui::Combo(TEXT_SHADOW_MODE, &modeIndex, SHADOW_MODE_LABELS, SHADOW_MODE_LABEL_COUNT)) {
+        state.shadowMode = static_cast<uint32_t>(modeIndex);
+    }
+    if (state.shadowMode == SHADOW_MODE_PCF) {
+        ImGui::SliderFloat(TEXT_PCF_RADIUS, &state.pcfRadius, 0.0f, SHADOW_PCF_RADIUS_MAX, "%.1f 纹素");
+    } else if (state.shadowMode == SHADOW_MODE_PCSS) {
+        ImGui::SliderFloat(TEXT_PCSS_SEARCH_RADIUS, &state.pcssSearchRadius, 1.0f,
+                           SHADOW_PCSS_SEARCH_RADIUS_MAX, "%.1f 纹素");
+        ImGui::SliderFloat(TEXT_PCSS_LIGHT_RADIUS, &state.pcssLightRadius,
+                           SHADOW_PCSS_LIGHT_RADIUS_MIN, SHADOW_PCSS_LIGHT_RADIUS_MAX, "%.0f",
+                           ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat(TEXT_PCSS_MIN_PENUMBRA, &state.pcssMinPenumbra, 0.0f, 8.0f, "%.1f 纹素");
+        ImGui::SliderFloat(TEXT_PCSS_MAX_PENUMBRA, &state.pcssMaxPenumbra, 1.0f,
+                           SHADOW_PCSS_MAX_PENUMBRA_LIMIT, "%.1f 纹素");
+    }
 
     ImGui::SeparatorText(TEXT_SECTION_SHADOW_MAP);
     int sizeIndex = shadowMapSizeIndex(state.shadowMapSize);

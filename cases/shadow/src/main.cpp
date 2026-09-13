@@ -31,6 +31,29 @@ static const float GROUND_MARGIN = 1.2f;
 // 报告里 case 自己的前几列
 static const char* const REPORT_HEADER_COLUMNS = "instances,draw_commands";
 
+// 阴影模式的命令行与控制服务取值
+static bool parseShadowMode(const std::string& value, uint32_t& mode)
+{
+    if (value == "off") {
+        mode = SHADOW_MODE_OFF;
+    } else if (value == "pcf") {
+        mode = SHADOW_MODE_PCF;
+    } else if (value == "pcss") {
+        mode = SHADOW_MODE_PCSS;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static const char* shadowModeName(uint32_t mode)
+{
+    if (mode == SHADOW_MODE_OFF) {
+        return "off";
+    }
+    return mode == SHADOW_MODE_PCF ? "pcf" : "pcss";
+}
+
 static std::string shadowReportPrefix(uint32_t instances, uint32_t drawCommands)
 {
     char prefix[64];
@@ -56,8 +79,7 @@ static void rebuildSwapchainResources(VulkanContext& ctx, ShadowRenderer& render
 
 // 由光源的两个角度与场景半径构造光源的正交投影
 static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm::vec3& lightDirection,
-                              float sceneRadius, const ShadowOptions& shadowOptions, float depthOffset,
-                              bool shadowsEnabled, bool pcfEnabled, bool normalLift, bool slopeBias,
+                              float sceneRadius, const ShadowOptions& shadowOptions, const UiState& state,
                               ShadowSceneUniform& outUniform)
 {
     CameraMatrices matrices;
@@ -78,11 +100,22 @@ static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm
 
     outUniform.lightDirection = glm::vec4(lightDirection, 0.0f);
     outUniform.lightColor = glm::vec4(1.0f, 0.96f, 0.9f, 3.0f);
-    outUniform.shadowParams = glm::vec4(depthOffset, 1.0f / static_cast<float>(shadowOptions.mapSize),
-                                        pcfEnabled ? 1.0f : 0.0f, shadowsEnabled ? 1.0f : 0.0f);
+    const float mapSize = static_cast<float>(shadowOptions.mapSize);
+    outUniform.shadowParams = glm::vec4(state.shadowDepthOffset, 1.0f / mapSize, state.pcfRadius,
+                                        static_cast<float>(state.shadowMode));
     // 法线抬升的距离取世界空间里一个阴影贴图纹素的宽度
-    const float liftDistance = 2.0f * radius / static_cast<float>(shadowOptions.mapSize);
-    outUniform.shadowOptions = glm::vec4(normalLift ? 1.0f : 0.0f, slopeBias ? 1.0f : 0.0f, liftDistance, 0.0f);
+    const float liftDistance = 2.0f * radius / mapSize;
+    // 归一化深度乘上远近平面间距再加近平面就是光源到表面的距离，这里先算出归一时要用的常数项
+    const float lightNear = 0.1f;
+    const float lightFar = radius * 6.0f;
+    const float nearOverRange = lightNear / (lightFar - lightNear);
+    outUniform.shadowOptions = glm::vec4(state.shadowNormalLift ? 1.0f : 0.0f,
+                                         state.shadowSlopeBias ? 1.0f : 0.0f, liftDistance,
+                                         nearOverRange);
+    // 光源半径按纹素尺度换算：世界单位乘以贴图边长再除以正交视锥的世界宽度
+    const float lightSizeTexels = state.pcssLightRadius * mapSize / (2.0f * radius);
+    outUniform.shadowPcss = glm::vec4(state.pcssSearchRadius, lightSizeTexels,
+                                      state.pcssMinPenumbra, state.pcssMaxPenumbra);
 }
 
 int main(int argc, char** argv)
@@ -99,8 +132,12 @@ int main(int argc, char** argv)
     uint32_t requestedMemoryClockMHz = 0;
     float lightYawDegrees = 135.0f;
     float lightPitchDegrees = 30.0f;
-    bool shadowsEnabled = true;
-    bool pcfEnabled = true;
+    uint32_t shadowMode = SHADOW_MODE_PCF;
+    float pcfRadius = SHADOW_PCF_RADIUS_DEFAULT;
+    float pcssSearchRadius = SHADOW_PCSS_SEARCH_RADIUS_DEFAULT;
+    float pcssLightRadius = SHADOW_PCSS_LIGHT_RADIUS_DEFAULT;
+    float pcssMinPenumbra = SHADOW_PCSS_MIN_PENUMBRA_DEFAULT;
+    float pcssMaxPenumbra = SHADOW_PCSS_MAX_PENUMBRA_DEFAULT;
     uint32_t shadowMapSize = SHADOW_MAP_DEFAULT_SIZE;
     uint32_t shadowMapBits = SHADOW_MAP_DEFAULT_BITS;
     bool backFaceDepth = true;
@@ -124,12 +161,39 @@ int main(int argc, char** argv)
             ++i;
         } else if (std::strcmp(argv[i], "--no-interface") == 0) {
             interfaceEnabled = false;
+        } else if (std::strcmp(argv[i], "--shadow-mode") == 0 && i + 1 < argc) {
+            if (!parseShadowMode(argv[i + 1], shadowMode)) {
+                FATAL("--shadow-mode takes off, pcf or pcss");
+            }
+            ++i;
         } else if (std::strcmp(argv[i], "--no-shadows") == 0) {
-            shadowsEnabled = false;
+            shadowMode = SHADOW_MODE_OFF;
+        } else if (std::strcmp(argv[i], "--shadows") == 0) {
+            shadowMode = SHADOW_MODE_PCF;
         } else if (std::strcmp(argv[i], "--pcf") == 0) {
-            pcfEnabled = true;
+            shadowMode = SHADOW_MODE_PCF;
+            pcfRadius = SHADOW_PCF_RADIUS_DEFAULT;
         } else if (std::strcmp(argv[i], "--no-pcf") == 0) {
-            pcfEnabled = false;
+            // 半径归零等价于一次比较，也就是硬阴影
+            shadowMode = SHADOW_MODE_PCF;
+            pcfRadius = 0.0f;
+        } else if (std::strcmp(argv[i], "--pcss") == 0) {
+            shadowMode = SHADOW_MODE_PCSS;
+        } else if (std::strcmp(argv[i], "--pcf-radius") == 0 && i + 1 < argc) {
+            pcfRadius = static_cast<float>(std::atof(argv[i + 1]));
+            ++i;
+        } else if (std::strcmp(argv[i], "--pcss-search") == 0 && i + 1 < argc) {
+            pcssSearchRadius = static_cast<float>(std::atof(argv[i + 1]));
+            ++i;
+        } else if (std::strcmp(argv[i], "--pcss-light-size") == 0 && i + 1 < argc) {
+            pcssLightRadius = static_cast<float>(std::atof(argv[i + 1]));
+            ++i;
+        } else if (std::strcmp(argv[i], "--pcss-min-penumbra") == 0 && i + 1 < argc) {
+            pcssMinPenumbra = static_cast<float>(std::atof(argv[i + 1]));
+            ++i;
+        } else if (std::strcmp(argv[i], "--pcss-max-penumbra") == 0 && i + 1 < argc) {
+            pcssMaxPenumbra = static_cast<float>(std::atof(argv[i + 1]));
+            ++i;
         } else if (std::strcmp(argv[i], "--shadow-size") == 0 && i + 1 < argc) {
             shadowMapSize = static_cast<uint32_t>(std::atoi(argv[i + 1]));
             ++i;
@@ -265,8 +329,12 @@ int main(int argc, char** argv)
     uiState.cameraMoveSpeed = camera.moveSpeed;
     uiState.lightYawDegrees = lightYawDegrees;
     uiState.lightPitchDegrees = lightPitchDegrees;
-    uiState.shadowsEnabled = shadowsEnabled;
-    uiState.pcfEnabled = pcfEnabled;
+    uiState.shadowMode = shadowMode;
+    uiState.pcfRadius = pcfRadius;
+    uiState.pcssSearchRadius = pcssSearchRadius;
+    uiState.pcssLightRadius = pcssLightRadius;
+    uiState.pcssMinPenumbra = pcssMinPenumbra;
+    uiState.pcssMaxPenumbra = pcssMaxPenumbra;
     uiState.shadowMapSize = shadowMapSize;
     uiState.shadowMapBits = shadowMapBits;
     uiState.shadowBackFaceDepth = backFaceDepth;
@@ -336,12 +404,20 @@ int main(int argc, char** argv)
             resetTimingWindows(timingStore);
             return "ok";
         }
+        if (verb == "shadow-mode") {
+            std::string value;
+            if (!(stream >> value) || !parseShadowMode(value, uiState.shadowMode)) {
+                return "err: shadow-mode takes off, pcf or pcss";
+            }
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
         if (verb == "shadows") {
             long value = 0;
             if (!(stream >> value) || (value != 0 && value != 1)) {
                 return "err: shadows takes 0 or 1";
             }
-            uiState.shadowsEnabled = value == 1;
+            uiState.shadowMode = value == 1 ? SHADOW_MODE_PCF : SHADOW_MODE_OFF;
             resetTimingWindows(timingStore);
             return "ok";
         }
@@ -350,7 +426,54 @@ int main(int argc, char** argv)
             if (!(stream >> value) || (value != 0 && value != 1)) {
                 return "err: pcf takes 0 or 1";
             }
-            uiState.pcfEnabled = value == 1;
+            // 关掉 PCF 就是半径为 1 与半径为 0 之间的切换
+            uiState.shadowMode = SHADOW_MODE_PCF;
+            uiState.pcfRadius = value == 1 ? SHADOW_PCF_RADIUS_DEFAULT : 0.0f;
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "pcf-radius") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 0.0 || value > SHADOW_PCF_RADIUS_MAX) {
+                return "err: pcf-radius out of range";
+            }
+            uiState.pcfRadius = static_cast<float>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "pcss-search") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 1.0 || value > SHADOW_PCSS_SEARCH_RADIUS_MAX) {
+                return "err: pcss-search out of range";
+            }
+            uiState.pcssSearchRadius = static_cast<float>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "pcss-light-size") {
+            double value = 0.0;
+            if (!(stream >> value) || value < SHADOW_PCSS_LIGHT_RADIUS_MIN || value > SHADOW_PCSS_LIGHT_RADIUS_MAX) {
+                return "err: pcss-light-size out of range";
+            }
+            uiState.pcssLightRadius = static_cast<float>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "pcss-min-penumbra") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 0.0 || value > 8.0) {
+                return "err: pcss-min-penumbra out of range";
+            }
+            uiState.pcssMinPenumbra = static_cast<float>(value);
+            resetTimingWindows(timingStore);
+            return "ok";
+        }
+        if (verb == "pcss-max-penumbra") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 1.0 || value > SHADOW_PCSS_MAX_PENUMBRA_LIMIT) {
+                return "err: pcss-max-penumbra out of range";
+            }
+            uiState.pcssMaxPenumbra = static_cast<float>(value);
             resetTimingWindows(timingStore);
             return "ok";
         }
@@ -525,9 +648,8 @@ int main(int argc, char** argv)
         shadowOptions.groundCaster = uiState.shadowGroundCaster;
 
         ShadowSceneUniform sceneUniform;
-        fillShadowUniform(camera, aspectRatio, lightDirection, sceneRadius, shadowOptions,
-                          uiState.shadowDepthOffset, uiState.shadowsEnabled, uiState.pcfEnabled,
-                          uiState.shadowNormalLift, uiState.shadowSlopeBias, sceneUniform);
+        fillShadowUniform(camera, aspectRatio, lightDirection, sceneRadius, shadowOptions, uiState,
+                          sceneUniform);
 
         const bool shouldExit = autoExitSeconds > 0.0 && currentTime - startTime >= autoExitSeconds;
         const bool shouldCaptureThisFrame = captureRequested && !captureDone && shouldExit;
@@ -539,8 +661,7 @@ int main(int argc, char** argv)
         FrameInput input = {};
         input.activeInstanceCount = activeInstanceCount;
         input.drawUserInterface = interfaceEnabled;
-        input.shadowsEnabled = uiState.shadowsEnabled;
-        input.pcfRadius = uiState.pcfEnabled ? 1.0f : 0.0f;
+        input.shadowMode = uiState.shadowMode;
         input.shadow = shadowOptions;
         input.captureBuffer = shouldCaptureThisFrame ? &captureBuffer : nullptr;
 
@@ -577,9 +698,12 @@ int main(int argc, char** argv)
         recordFrameTimingSamples(timingStore, currentTime, includeInReport, timingValues);
 
         if (currentTime - lastPrintTime >= 0.5) {
-            std::printf("instances %u | draw commands %u | shadows %s | pcf %s\n", activeInstanceCount,
-                        uiStatistics.drawCallCount, uiState.shadowsEnabled ? "on" : "off",
-                        uiState.pcfEnabled ? "on" : "off");
+            std::printf("instances %u | draw commands %u | shadow mode %s | pcf radius %.1f | pcss search "
+                        "%.1f light %.1f penumbra %.1f..%.1f\n",
+                        activeInstanceCount, uiStatistics.drawCallCount,
+                        shadowModeName(uiState.shadowMode), uiState.pcfRadius,
+                        uiState.pcssSearchRadius, uiState.pcssLightRadius, uiState.pcssMinPenumbra,
+                        uiState.pcssMaxPenumbra);
             for (int i = 0; i < TIMING_ID_COUNT; ++i) {
                 const TimingWindow& window = timingStore.window[i];
                 if (i == TIMING_FRAME) {

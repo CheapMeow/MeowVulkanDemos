@@ -9,11 +9,80 @@ float litFromDepth(float referenceDepth, vec2 uv)
     return referenceDepth <= texture(shadowMap, uv).r ? 1.0 : 0.0;
 }
 
+// 百分比渐近过滤：在半径上取 3 乘 3 个纹素各比较一次再取平均。
+// 半径为零时退化成一次比较，得到硬阴影
+float filterShadow(float referenceDepth, vec2 uv, float radius)
+{
+    if (radius <= 0.0) {
+        return litFromDepth(referenceDepth, uv);
+    }
+
+    float sum = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            const vec2 offset = vec2(float(x), float(y)) * scene.shadowParams.y * radius;
+            sum += litFromDepth(referenceDepth, uv + offset);
+        }
+    }
+    return sum / 9.0;
+}
+
+// 在推算出的半影宽度上过滤：5 乘 5 个采样覆盖正负一个半影
+float filterPenumbra(float referenceDepth, vec2 uv, float penumbra)
+{
+    float sum = 0.0;
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            const vec2 offset = vec2(float(x), float(y)) * scene.shadowParams.y * penumbra * 0.5;
+            sum += litFromDepth(referenceDepth, uv + offset);
+        }
+    }
+    return sum / 25.0;
+}
+
+// 遮挡物搜索：在搜索半径内统计落在接收点之前的纹素，返回它们的平均深度。
+// 一个遮挡物都没有时返回负值，表示这一点完全受光
+float searchBlockers(float referenceDepth, vec2 uv, float radius)
+{
+    float depthSum = 0.0;
+    float count = 0.0;
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            const vec2 offset = vec2(float(x), float(y)) * scene.shadowParams.y * radius * 0.5;
+            const float depth = texture(shadowMap, uv + offset).r;
+            if (referenceDepth > depth) {
+                depthSum += depth;
+                count += 1.0;
+            }
+        }
+    }
+    return count > 0.0 ? depthSum / count : -1.0;
+}
+
+// 百分比渐近软阴影：遮挡物搜索给出遮挡物的平均深度，接收点到遮挡物的距离决定半影宽度，
+// 遮挡物离接收点越远半影越宽，最后在半影宽度上做比较。
+// 距离之比在光源正交投影下换算，那个投影里深度沿光线方向线性变化，
+// 归一化深度乘上远近平面间距再加上近平面就是光源到表面的距离
+float samplePcss(float referenceDepth, vec2 uv)
+{
+    const float blockerDepth = searchBlockers(referenceDepth, uv, scene.shadowPcss.x);
+    if (blockerDepth < 0.0) {
+        return 1.0;
+    }
+
+    const float ratio =
+        (referenceDepth - blockerDepth) / max(blockerDepth + scene.shadowOptions.w, 1e-5);
+    const float penumbra =
+        clamp(ratio * scene.shadowPcss.y, scene.shadowPcss.z, scene.shadowPcss.w);
+    return filterPenumbra(referenceDepth, uv, penumbra);
+}
+
 // 返回 0 到 1 的受光比例：1 表示完全受光，0 表示完全处在阴影里。
-// 阴影开关关闭时恒为 1
+// 阴影模式为零时恒为 1
 float sampleShadow(vec3 worldPosition, vec3 normal, float nDotL)
 {
-    if (scene.shadowParams.w < 0.5) {
+    const int mode = int(scene.shadowParams.w + 0.5);
+    if (mode <= 0) {
         return 1.0;
     }
 
@@ -32,20 +101,11 @@ float sampleShadow(vec3 worldPosition, vec3 normal, float nDotL)
         bias = max(bias * (1.0 - nDotL), bias);
     }
     float referenceDepth = projected.z - bias;
-    float radius = scene.shadowParams.z;
 
-    if (radius <= 0.0) {
-        return litFromDepth(referenceDepth, projected.xy);
+    if (mode >= 2) {
+        return samplePcss(referenceDepth, projected.xy);
     }
-
-    float sum = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            vec2 offset = vec2(float(x), float(y)) * scene.shadowParams.y * radius;
-            sum += litFromDepth(referenceDepth, projected.xy + offset);
-        }
-    }
-    return sum / 9.0;
+    return filterShadow(referenceDepth, projected.xy, scene.shadowParams.z);
 }
 
 #endif

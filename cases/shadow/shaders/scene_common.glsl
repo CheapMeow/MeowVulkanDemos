@@ -15,8 +15,11 @@ layout(set = 0, binding = 0) uniform SceneBuffer {
     vec4 cameraPosition;
     vec4 lightDirection;  // xyz 指向光源的单位向量
     vec4 lightColor;      // rgb 颜色, a 强度
-    vec4 shadowParams;    // x 基础深度偏移, y 阴影贴图纹素大小, z PCF 半径, w 阴影开关
-    vec4 shadowOptions;   // x 法线抬升开关, y 角度偏移开关, z 法线抬升距离（世界单位）, w 保留
+    vec4 shadowParams;    // x 基础深度偏移, y 阴影贴图纹素大小, z PCF 半径（纹素）, w 阴影模式
+    vec4 shadowOptions;   // x 法线抬升开关, y 角度偏移开关, z 法线抬升距离（世界单位）,
+                          // w 光源近平面的归一化修正量, 把归一化深度还原成距离时用
+    vec4 shadowPcss;      // x 遮挡物搜索半径（纹素）, y 光源半径换算出的纹素尺度,
+                          // z 最小半影（纹素）, w 最大半影（纹素）
 } scene;
 
 layout(set = 0, binding = 1) readonly buffer InstanceBuffer {

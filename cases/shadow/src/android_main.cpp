@@ -41,6 +41,28 @@ static const float GROUND_MARGIN = 1.2f;
 // 报告里 case 自己的前几列
 const char* const REPORT_HEADER_COLUMNS = "instances,draw_commands";
 
+bool parseShadowMode(const std::string& value, uint32_t& mode)
+{
+    if (value == "off") {
+        mode = SHADOW_MODE_OFF;
+    } else if (value == "pcf") {
+        mode = SHADOW_MODE_PCF;
+    } else if (value == "pcss") {
+        mode = SHADOW_MODE_PCSS;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+const char* shadowModeName(uint32_t mode)
+{
+    if (mode == SHADOW_MODE_OFF) {
+        return "off";
+    }
+    return mode == SHADOW_MODE_PCF ? "pcf" : "pcss";
+}
+
 struct AppState {
     VulkanContext ctx = {};
     ShadowRenderer renderer = {};
@@ -93,8 +115,7 @@ static std::string shadowReportPrefix(uint32_t instances, uint32_t drawCommands)
 
 // 由光源的两个角度与场景半径构造光源的正交投影
 static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm::vec3& lightDirection,
-                              float sceneRadius, const ShadowOptions& shadowOptions, float depthOffset,
-                              bool shadowsEnabled, bool pcfEnabled, bool normalLift, bool slopeBias,
+                              float sceneRadius, const ShadowOptions& shadowOptions, const UiState& state,
                               ShadowSceneUniform& outUniform)
 {
     CameraMatrices matrices;
@@ -115,11 +136,22 @@ static void fillShadowUniform(const Camera& camera, float aspectRatio, const glm
 
     outUniform.lightDirection = glm::vec4(lightDirection, 0.0f);
     outUniform.lightColor = glm::vec4(1.0f, 0.96f, 0.9f, 3.0f);
-    outUniform.shadowParams = glm::vec4(depthOffset, 1.0f / static_cast<float>(shadowOptions.mapSize),
-                                        pcfEnabled ? 1.0f : 0.0f, shadowsEnabled ? 1.0f : 0.0f);
+    const float mapSize = static_cast<float>(shadowOptions.mapSize);
+    outUniform.shadowParams = glm::vec4(state.shadowDepthOffset, 1.0f / mapSize, state.pcfRadius,
+                                        static_cast<float>(state.shadowMode));
     // 法线抬升的距离取世界空间里一个阴影贴图纹素的宽度
-    const float liftDistance = 2.0f * radius / static_cast<float>(shadowOptions.mapSize);
-    outUniform.shadowOptions = glm::vec4(normalLift ? 1.0f : 0.0f, slopeBias ? 1.0f : 0.0f, liftDistance, 0.0f);
+    const float liftDistance = 2.0f * radius / mapSize;
+    // 归一化深度乘上远近平面间距再加近平面就是光源到表面的距离，这里先算出归一时要用的常数项
+    const float lightNear = 0.1f;
+    const float lightFar = radius * 6.0f;
+    const float nearOverRange = lightNear / (lightFar - lightNear);
+    outUniform.shadowOptions = glm::vec4(state.shadowNormalLift ? 1.0f : 0.0f,
+                                         state.shadowSlopeBias ? 1.0f : 0.0f, liftDistance,
+                                         nearOverRange);
+    // 光源半径按纹素尺度换算：世界单位乘以贴图边长再除以正交视锥的世界宽度
+    const float lightSizeTexels = state.pcssLightRadius * mapSize / (2.0f * radius);
+    outUniform.shadowPcss = glm::vec4(state.pcssSearchRadius, lightSizeTexels,
+                                      state.pcssMinPenumbra, state.pcssMaxPenumbra);
 }
 
 static void initializeRendererStack(AppState& state, android_app* app)
@@ -320,15 +352,12 @@ static void drawOneFrame(AppState& state)
 
     ShadowSceneUniform sceneUniform;
     fillShadowUniform(state.camera, aspectRatio, lightDirection, sceneRadius, shadowOptions,
-                      state.uiState.shadowDepthOffset, state.uiState.shadowsEnabled,
-                      state.uiState.pcfEnabled, state.uiState.shadowNormalLift,
-                      state.uiState.shadowSlopeBias, sceneUniform);
+                      state.uiState, sceneUniform);
 
     FrameInput input = {};
     input.activeInstanceCount = activeInstanceCount;
     input.drawUserInterface = true;
-    input.shadowsEnabled = state.uiState.shadowsEnabled;
-    input.pcfRadius = state.uiState.pcfEnabled ? 1.0f : 0.0f;
+    input.shadowMode = state.uiState.shadowMode;
     input.shadow = shadowOptions;
 
     FrameStatistics statistics = {};
@@ -403,12 +432,20 @@ static void installControlHandler(AppState& state)
             resetTimingWindows(state.timingStore);
             return "ok";
         }
+        if (verb == "shadow-mode") {
+            std::string value;
+            if (!(stream >> value) || !parseShadowMode(value, state.uiState.shadowMode)) {
+                return "err: shadow-mode takes off, pcf or pcss";
+            }
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
         if (verb == "shadows") {
             long value = 0;
             if (!(stream >> value) || (value != 0 && value != 1)) {
                 return "err: shadows takes 0 or 1";
             }
-            state.uiState.shadowsEnabled = value == 1;
+            state.uiState.shadowMode = value == 1 ? SHADOW_MODE_PCF : SHADOW_MODE_OFF;
             resetTimingWindows(state.timingStore);
             return "ok";
         }
@@ -417,7 +454,53 @@ static void installControlHandler(AppState& state)
             if (!(stream >> value) || (value != 0 && value != 1)) {
                 return "err: pcf takes 0 or 1";
             }
-            state.uiState.pcfEnabled = value == 1;
+            state.uiState.shadowMode = SHADOW_MODE_PCF;
+            state.uiState.pcfRadius = value == 1 ? SHADOW_PCF_RADIUS_DEFAULT : 0.0f;
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "pcf-radius") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 0.0 || value > SHADOW_PCF_RADIUS_MAX) {
+                return "err: pcf-radius out of range";
+            }
+            state.uiState.pcfRadius = static_cast<float>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "pcss-search") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 1.0 || value > SHADOW_PCSS_SEARCH_RADIUS_MAX) {
+                return "err: pcss-search out of range";
+            }
+            state.uiState.pcssSearchRadius = static_cast<float>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "pcss-light-size") {
+            double value = 0.0;
+            if (!(stream >> value) || value < SHADOW_PCSS_LIGHT_RADIUS_MIN || value > SHADOW_PCSS_LIGHT_RADIUS_MAX) {
+                return "err: pcss-light-size out of range";
+            }
+            state.uiState.pcssLightRadius = static_cast<float>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "pcss-min-penumbra") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 0.0 || value > 8.0) {
+                return "err: pcss-min-penumbra out of range";
+            }
+            state.uiState.pcssMinPenumbra = static_cast<float>(value);
+            resetTimingWindows(state.timingStore);
+            return "ok";
+        }
+        if (verb == "pcss-max-penumbra") {
+            double value = 0.0;
+            if (!(stream >> value) || value < 1.0 || value > SHADOW_PCSS_MAX_PENUMBRA_LIMIT) {
+                return "err: pcss-max-penumbra out of range";
+            }
+            state.uiState.pcssMaxPenumbra = static_cast<float>(value);
             resetTimingWindows(state.timingStore);
             return "ok";
         }
@@ -513,8 +596,12 @@ void android_main(android_app* app)
     state.uiState.activeInstanceCount = 2000;
     state.uiState.lightYawDegrees = 135.0f;
     state.uiState.lightPitchDegrees = 30.0f;
-    state.uiState.shadowsEnabled = true;
-    state.uiState.pcfEnabled = true;
+    state.uiState.shadowMode = SHADOW_MODE_PCF;
+    state.uiState.pcfRadius = SHADOW_PCF_RADIUS_DEFAULT;
+    state.uiState.pcssSearchRadius = SHADOW_PCSS_SEARCH_RADIUS_DEFAULT;
+    state.uiState.pcssLightRadius = SHADOW_PCSS_LIGHT_RADIUS_DEFAULT;
+    state.uiState.pcssMinPenumbra = SHADOW_PCSS_MIN_PENUMBRA_DEFAULT;
+    state.uiState.pcssMaxPenumbra = SHADOW_PCSS_MAX_PENUMBRA_DEFAULT;
     state.uiState.shadowMapSize = SHADOW_MAP_DEFAULT_SIZE;
     state.uiState.shadowMapBits = SHADOW_MAP_DEFAULT_BITS;
     state.uiState.shadowBackFaceDepth = true;

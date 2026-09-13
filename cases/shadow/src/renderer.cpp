@@ -797,7 +797,7 @@ bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t fram
     uint32_t drawCallCount = 0;
 
     const double shadowPassStart = nowSeconds();
-    if (input.shadowsEnabled) {
+    if (input.shadowMode != SHADOW_MODE_OFF) {
         const float shadowMapSize = static_cast<float>(renderer.shadowMapSize);
 
         VkViewport shadowViewport = {};

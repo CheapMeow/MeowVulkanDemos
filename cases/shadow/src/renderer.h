@@ -20,9 +20,30 @@ enum {
 // 8 位用 R8_UNORM、16 位用 R16_UNORM、32 位用 R32_SFLOAT
 VkFormat shadowMapColorFormat(uint32_t bits);
 
+// 阴影模式的取值：关闭、百分比渐近过滤、百分比渐近软阴影
+enum ShadowMode {
+    SHADOW_MODE_OFF = 0,
+    SHADOW_MODE_PCF = 1,
+    SHADOW_MODE_PCSS = 2,
+};
+
 // 基础深度偏移，单位是光源正交投影下归一化后的深度；界面上可调，调到零就能看到自阴影条纹
 constexpr float SHADOW_DEPTH_OFFSET_DEFAULT = 0.0005f;
 constexpr float SHADOW_DEPTH_OFFSET_MAX = 0.004f;
+
+// PCF 与 PCSS 的默认参数。PCF 半径为零时退化成一次比较，就是硬阴影
+constexpr float SHADOW_PCF_RADIUS_DEFAULT = 1.0f;
+constexpr float SHADOW_PCF_RADIUS_MAX = 3.0f;
+constexpr float SHADOW_PCSS_SEARCH_RADIUS_DEFAULT = 4.0f;
+constexpr float SHADOW_PCSS_SEARCH_RADIUS_MAX = 8.0f;
+// 光源半径的单位是世界单位。方向光的光源放在 2.5 倍场景半径处，这个场景的半径在两百以上，
+// 半径小的光源角直径微乎其微，半影会小到一个纹素以下，看不到软阴影
+constexpr float SHADOW_PCSS_LIGHT_RADIUS_MIN = 25.0f;
+constexpr float SHADOW_PCSS_LIGHT_RADIUS_DEFAULT = 400.0f;
+constexpr float SHADOW_PCSS_LIGHT_RADIUS_MAX = 2000.0f;
+constexpr float SHADOW_PCSS_MIN_PENUMBRA_DEFAULT = 1.0f;
+constexpr float SHADOW_PCSS_MAX_PENUMBRA_DEFAULT = 16.0f;
+constexpr float SHADOW_PCSS_MAX_PENUMBRA_LIMIT = 64.0f;
 
 // 与着色器中的 SceneBuffer 逐字节对应
 struct ShadowSceneUniform {
@@ -33,8 +54,9 @@ struct ShadowSceneUniform {
     glm::vec4 cameraPosition;
     glm::vec4 lightDirection;  // xyz 指向光源的单位向量
     glm::vec4 lightColor;      // rgb 颜色, a 强度
-    glm::vec4 shadowParams;    // x 基础深度偏移, y 阴影贴图纹素大小, z PCF 半径, w 阴影开关
-    glm::vec4 shadowOptions;   // x 法线抬升开关, y 角度偏移开关, z 法线抬升距离（世界单位）, w 保留
+    glm::vec4 shadowParams;    // x 基础深度偏移, y 阴影贴图纹素大小, z PCF 半径, w 阴影模式
+    glm::vec4 shadowOptions;   // x 法线抬升开关, y 角度偏移开关, z 法线抬升距离, w 近平面的归一化修正量
+    glm::vec4 shadowPcss;      // x 遮挡物搜索半径, y 光源半径的纹素尺度, z 最小半影, w 最大半影
 };
 
 // 阴影贴图与瑕疵处理的可调配置。尺寸、位数与只写背面深度发生变化时重建阴影资源，
@@ -116,8 +138,7 @@ struct ShadowRenderer {
 struct FrameInput {
     uint32_t activeInstanceCount;
     bool drawUserInterface;
-    bool shadowsEnabled;
-    float pcfRadius;
+    uint32_t shadowMode;
     // 阴影配置，与渲染器当前配置不同时在这一帧开始处重建相关资源
     ShadowOptions shadow;
     // 非空时把本帧结果拷回该缓冲

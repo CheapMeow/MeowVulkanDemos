@@ -13,13 +13,13 @@
 
 深度值存在颜色附件里，比较在片元着色器里手动完成。
 
-受光比例有三种取值方式，界面上可以切换：
+受光比例的取值方式有三种，界面上用一个下拉框切换：
 
-| 模式 | 开关 | 说明 |
-| --- | --- | --- |
-| 无阴影 | 关闭"启用阴影" | 受光比例恒为 1，只有方向光的直接光照 |
-| 硬阴影 | 开启阴影、关闭 PCF | 贴图上取一次比较结果，边界是硬边 |
-| 软阴影 | 开启阴影与 PCF | 在 3 × 3 个纹素上各取一次比较再取平均，边界变宽并带渐变 |
+| 模式 | 说明 |
+| --- | --- |
+| 关闭 | 受光比例恒为 1，只有方向光的直接光照；阴影通道整段不执行，绘制命令少一条 |
+| PCF | 在固定半径上取纹素各比较一次再取平均。半径为零时退化成一次比较，也就是硬阴影 |
+| PCSS | 先用遮挡物搜索估算遮挡物的平均深度，再按接收点到遮挡物的距离推算半影宽度，最后在半影范围上过滤 |
 
 实例、相机与着色器里的数据结构与其他 case 共用 `common` 下的定义，本 case 只实现自己的渲染通道、管线与控制面板。
 
@@ -77,6 +77,43 @@ graph LR
 
 只写背面深度决定阴影管线的剔除面，改动时重建管线；法线抬升、掠射角放大偏移与基础深度偏移只进 uniform，不触发重建。
 
+### 百分比渐近软阴影
+
+PCF 的过滤半径是常数，阴影边界的宽度不随遮挡物的远近变化；真实的面光源在接收点被近处遮挡物挡住时
+半影窄，被远处遮挡物挡住时半影宽。PCSS 用两步把这个关系补上：先在接收点周围一个搜索半径内统计落在
+接收点之前的纹素，得到遮挡物的平均深度；接收点到遮挡物的距离与遮挡物到光源的距离之比决定半影宽度，
+遮挡物离得越远半影越宽；最后在这个半影宽度上做过滤。搜索半径内一个遮挡物都没有时这一点按完全受光处理。
+
+半影宽度按光源正交投影下的深度换算。那个投影里深度沿光线方向线性变化，归一化深度乘上远近平面间距再
+加上近平面就是光源到表面的距离，所以距离之比只需要一个常数项就能算出来。换算出的是世界单位的半影，
+再除以一个纹素的世界尺寸就得到以纹素为单位的过滤半径，这个半径被上下限钳住，上界限制一次过滤最多
+覆盖多少纹素。
+
+光源半径的单位是世界单位。场景的光源放在 2.5 倍场景半径处，实例数量两千时场景半径约 264，光源在 660
+个世界单位之外；半径小的光源角直径微乎其微，半影会小到一个纹素以下，看起来与 PCF 没有区别，所以默认
+半径取 400，可调范围是 25 到 2000。
+
+以无阴影的画面为完全受光的基准，把比值落在 0.15 到 0.85 之间的像素算作半影，实测：
+
+| 模式 | 半影像素 | 占比 |
+| --- | --- | --- |
+| PCF（半径 1 纹素） | 62111 | 4.313% |
+| PCSS（光源半径 100） | 70597 | 4.903% |
+| PCSS（光源半径 400） | 79402 | 5.514% |
+| PCSS（光源半径 1200） | 80706 | 5.605% |
+
+PCSS 的半影面积比 PCF 大，并且随光源半径增长；增长到 1200 之后趋于平缓，那是半影上界把过滤半径钳住
+了。锁定核心频率 2880 兆赫、显存频率 15001 兆赫，实例两千、贴图 2048 见方时的设备时间：
+
+| 模式 | 设备时间 | 绘制命令 |
+| --- | --- | --- |
+| 关闭 | 6.452 | 2 |
+| PCF | 12.854 | 3 |
+| PCSS | 12.899 | 3 |
+
+PCSS 每次受光比例计算要读五十个纹素，PCF 只要九个，但主通道的这点增量在这套装满两千个实例的
+2048 见方阴影通道面前只有 0.045 毫秒，整帧的时间几乎都被阴影通道本身占着。
+
 ### 地面是否参与投影
 
 阴影通道默认只画物体实例，地面那一份实例变换放在实例缓冲末尾，绘制范围取不到它，因此地面只在主通道里当接收者。面板上的「地面写入阴影贴图」把地面也画进阴影通道，它在阴影通道里不剔除，用单独一条管线。
@@ -117,8 +154,11 @@ graph LR
 | 移动速度 | 相机移动速度 |
 | 方位角 | 光源绕 Y 轴的方向 |
 | 高度角 | 光源与水平面的夹角，越大越接近正上方 |
-| 启用阴影 | 关闭后完全不做深度比较，用作对照 |
-| PCF 软阴影 | 关闭后只做一次深度比较，得到硬阴影 |
+| 阴影模式 | 关闭、PCF、PCSS 三档；关闭时阴影通道整段不执行 |
+| PCF 半径 | 过滤半径，以纹素为单位；零表示一次比较，得到硬阴影 |
+| 遮挡物搜索半径 | PCSS 第一步搜索遮挡物的半径，以纹素为单位 |
+| 光源半径 | PCSS 推算半影用的光源半径，单位是世界单位 |
+| 最小半影、最大半影 | 过滤半径的上下限，以纹素为单位 |
 | 分辨率 | 阴影贴图的边长，可选 512、1024、2048、4096，改动后重建贴图 |
 | 深度值位数 | 每纹素存深度值的位数，可选 8、16、32，改动后重建渲染通道与管线 |
 | 只写背面深度 | 阴影通道的剔除面，关闭后写入正面深度，可以观察自阴影条纹 |
@@ -139,8 +179,15 @@ graph LR
 | `--instances N` | 启动时的实例数量 | 2000 |
 | `--light-yaw D` | 光源方位角，单位度 | 135 |
 | `--light-pitch D` | 光源高度角，单位度 | 30 |
-| `--no-shadows` | 启动时关闭阴影 | 开启 |
-| `--no-pcf` | 启动时关闭 PCF，得到硬阴影 | 开启 |
+| `--shadow-mode off\|pcf\|pcss` | 启动时的阴影模式 | pcf |
+| `--no-shadows` / `--shadows` | 等价于 `--shadow-mode off` 与 `--shadow-mode pcf` | 开启 |
+| `--pcss` | 等价于 `--shadow-mode pcss` | 关闭 |
+| `--no-pcf` / `--pcf` | 在 PCF 模式里把半径切到 0 与默认值，零就是硬阴影 | 半径 1 |
+| `--pcf-radius F` | PCF 的过滤半径，取值 0 到 3 | 1 |
+| `--pcss-search F` | 遮挡物搜索半径，取值 1 到 8 | 4 |
+| `--pcss-light-size F` | 光源半径，取值 25 到 2000 | 400 |
+| `--pcss-min-penumbra F` | 最小半影，取值 0 到 8 | 1 |
+| `--pcss-max-penumbra F` | 最大半影，取值 1 到 64 | 16 |
 | `--shadow-size N` | 阴影贴图的边长，取值 256 到 4096 | 2048 |
 | `--shadow-bits N` | 每纹素存深度值的位数，取 8、16 或 32 | 32 |
 | `--no-back-face-depth` | 启动时改写入正面深度 | 只写背面 |
@@ -163,12 +210,22 @@ graph LR
 三种模式的画面差异可以用抓帧对比：
 
 ```
-build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_off.png --no-shadows
-build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_hard.png --no-pcf
-build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_pcf.png
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_off.png --shadow-mode off
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_hard.png --shadow-mode pcf --pcf-radius 0
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_pcf.png --shadow-mode pcf
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_pcss.png --shadow-mode pcss
 ```
 
-关闭阴影的那张应当完全没有被遮挡关系影响的明暗；硬阴影与软阴影两张的差别集中在阴影边界附近，软阴影的边界更宽、过渡带里有中间灰。
+关闭阴影的那张应当完全没有被遮挡关系影响的明暗；硬阴影与 PCF 两张的差别集中在阴影边界附近，PCF 的边界更宽、过渡带里有中间灰；PCSS 那张的过渡带比 PCF 更宽，并且宽出来的部分集中在遮挡物离接收点较远的地方。
+
+PCSS 的半影宽度随光源半径变化，PCF 的边界宽度与光源无关：
+
+```
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_pcss_small.png --shadow-mode pcss --pcss-light-size 100
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_pcss_large.png --shadow-mode pcss --pcss-light-size 1200
+```
+
+把 `--pcss-max-penumbra` 压到 1，PCSS 与半径 1 的 PCF 会非常接近，因为两者的过滤半径被钳到同一个值。
 
 贴图分辨率与深度值位数也可以指定，用来看量化带来的差别：
 
@@ -205,7 +262,7 @@ build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture in
 adb -s <serial> forward tcp:21000 tcp:21000
 ```
 
-桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`instances`/`yaw`/`pitch` 改配置，`shadows 1`/`shadows 0` 开关阴影，`pcf 1`/`pcf 0` 开关软阴影，`shadow-size` 与 `shadow-bits` 改贴图配置并触发重建，`back-face-depth`/`normal-lift`/`slope-bias` 取 0 或 1 逐项开关瑕疵处理，`depth-offset` 改基础深度偏移，`ground-caster 0|1` 开关地面参与投影，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
+桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`instances`/`yaw`/`pitch` 改配置，`shadow-mode off|pcf|pcss` 切换阴影模式，`pcf-radius` 改 PCF 的过滤半径，`pcss-search`/`pcss-light-size`/`pcss-min-penumbra`/`pcss-max-penumbra` 改 PCSS 的四项参数，`shadows 1`/`shadows 0` 与 `pcf 1`/`pcf 0` 是模式切换的简写，`shadow-size` 与 `shadow-bits` 改贴图配置并触发重建，`back-face-depth`/`normal-lift`/`slope-bias` 取 0 或 1 逐项开关瑕疵处理，`depth-offset` 改基础深度偏移，`ground-caster 0|1` 开关地面参与投影，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
 
 随时间变化的参数曲线与测量报告格式与间接绘制 case 一致，报告里的前两列是实例数量与绘制命令条数。
 
@@ -225,7 +282,7 @@ adb -s <serial> forward tcp:21000 tcp:21000
 | `shaders/shadow.frag` | 阴影通道，把窗口深度写进颜色附件 |
 | `shaders/scene.vert` `shaders/scene.frag` | 主通道的物体 |
 | `shaders/ground.frag` | 主通道的地面，棋盘格图案 |
-| `shaders/shadow_sampling.glsl` | 手动深度比较与 PCF |
+| `shaders/shadow_sampling.glsl` | 手动深度比较、百分比渐近过滤、遮挡物搜索与半影估计 |
 | `shaders/lighting_common.glsl` | 方向光的直接光照 |
 
 ## 安卓端差异

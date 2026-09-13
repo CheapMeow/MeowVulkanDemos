@@ -11,8 +11,15 @@ struct UiState {
     float cameraMoveSpeed;
     float lightYawDegrees;
     float lightPitchDegrees;
-    bool shadowsEnabled;
-    bool pcfEnabled;
+    // 阴影模式：0 关闭, 1 百分比渐近过滤, 2 百分比渐近软阴影
+    uint32_t shadowMode;
+    // PCF 的过滤半径，以纹素为单位；为零时退化成一次比较，也就是硬阴影
+    float pcfRadius;
+    // PCSS 的遮挡物搜索半径、光源半径与半影宽度的上下限
+    float pcssSearchRadius;
+    float pcssLightRadius;
+    float pcssMinPenumbra;
+    float pcssMaxPenumbra;
     // 阴影贴图的分辨率与保存深度值的位数，改动后渲染器会重建阴影资源
     uint32_t shadowMapSize;
     uint32_t shadowMapBits;
