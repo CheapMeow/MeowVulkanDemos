@@ -191,6 +191,8 @@ static void createLogicalDevice(VulkanContext& ctx)
     // 片元着色器里的原子累加用于帧内计数回读
     features.fragmentStoresAndAtomics = VK_TRUE;
     features.vertexPipelineStoresAndAtomics = VK_TRUE;
+    // 顺序无关透明的加权混合要对两张附件用不同的混合状态
+    features.independentBlend = VK_TRUE;
 
     VkDeviceCreateInfo deviceInfo = {};
     deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

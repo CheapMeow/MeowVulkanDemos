@@ -1,0 +1,20 @@
+# transparency case：半透明排序与顺序无关透明
+meow_add_case(transparency
+    SOURCES
+        src/renderer.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/quad.vert
+        shaders/quad.frag
+        shaders/weighted.frag
+        shaders/list.frag
+        shaders/fullscreen.vert
+        shaders/composite.frag
+        shaders/weighted_resolve.frag
+        shaders/list_resolve.frag
+)
