@@ -66,4 +66,5 @@ VkDescriptorSet allocateDescriptorSet(const VulkanContext& ctx, VkDescriptorPool
 void writeBufferDescriptor(const VulkanContext& ctx, VkDescriptorSet set, uint32_t binding,
                            VkDescriptorType type, const GpuBuffer& buffer);
 void writeImageDescriptor(const VulkanContext& ctx, VkDescriptorSet set, uint32_t binding, VkImageView view,
-                          VkSampler sampler);
+                          VkSampler sampler,
+                          VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

@@ -1,0 +1,47 @@
+#version 450
+
+// 金字塔：把上一层八乘八的小块取极值。遮挡剔除取最远深度做保守判定，
+// 取最近深度会把可见物体剔掉
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform SceneBuffer {
+    mat4 viewProjection;
+    vec4 viewportParams;
+    vec4 modeParams;   // x 是否启用遮挡剔除, y 金字塔取向, z 固定层级, w 保留
+    vec4 miscParams;
+} scene;
+
+layout(set = 0, binding = 2) uniform sampler2D sourceDepth;
+
+layout(set = 1, binding = 0, r32f) uniform writeonly image2D destDepth;
+
+layout(push_constant) uniform Params {
+    vec4 size;   // xy 源尺寸, zw 目标尺寸
+} pc;
+
+void main()
+{
+    const ivec2 dest = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 destSize = ivec2(pc.size.zw);
+    if (dest.x >= destSize.x || dest.y >= destSize.y) {
+        return;
+    }
+
+    const ivec2 sourceSize = ivec2(pc.size.xy);
+    const bool farthest = scene.modeParams.y < 0.5;
+    float value = farthest ? 0.0 : 1.0;
+
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            const ivec2 sourceTexel = dest * 8 + ivec2(x, y);
+            if (sourceTexel.x >= sourceSize.x || sourceTexel.y >= sourceSize.y) {
+                continue;
+            }
+            const float sampleDepth = texelFetch(sourceDepth, sourceTexel, 0).r;
+            value = farthest ? max(value, sampleDepth) : min(value, sampleDepth);
+        }
+    }
+
+    imageStore(destDepth, dest, vec4(value));
+}

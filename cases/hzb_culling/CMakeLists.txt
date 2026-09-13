@@ -1,0 +1,20 @@
+# hzb_culling case：HZB 遮挡剔除与极值取向
+meow_add_case(hzb_culling
+    SOURCES
+        src/renderer.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/box.vert
+        shaders/box.frag
+        shaders/depth_only.frag
+        shaders/fullscreen.vert
+        shaders/present.frag
+        shaders/hzb.comp
+        shaders/cull.comp
+        shaders/scan.comp
+)

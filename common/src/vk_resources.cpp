@@ -416,12 +416,12 @@ void writeBufferDescriptor(const VulkanContext& ctx, VkDescriptorSet set, uint32
 }
 
 void writeImageDescriptor(const VulkanContext& ctx, VkDescriptorSet set, uint32_t binding, VkImageView view,
-                          VkSampler sampler)
+                          VkSampler sampler, VkImageLayout layout)
 {
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.sampler = sampler;
     imageInfo.imageView = view;
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageLayout = layout;
 
     VkWriteDescriptorSet write = {};
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

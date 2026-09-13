@@ -1,0 +1,112 @@
+#version 450
+
+// 遮挡剔除：把实例的包围盒投影到屏幕，取覆盖到的整片金字塔纹素做极值。
+// 取最远深度时判定是保守的，取最近深度会把可见物体剔掉
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) uniform SceneBuffer {
+    mat4 viewProjection;
+    vec4 viewportParams;   // xy 视口尺寸, z 包围盒扩大系数, w 层级模式（0 固定层级, 1 按屏幕尺寸）
+    vec4 modeParams;       // x 是否启用遮挡剔除, y 金字塔取向, z 固定层级, w 保留
+    vec4 miscParams;       // x 实例数量, y 是否可视化, z 保留, w 深度来源
+} scene;
+
+layout(set = 0, binding = 1) readonly buffer InstanceBuffer {
+    vec4 instances[];
+} instanceBuffer;
+
+layout(set = 0, binding = 2) uniform sampler2D pyramidLevel0;
+layout(set = 0, binding = 3) uniform sampler2D pyramidLevel1;
+
+layout(set = 1, binding = 0) buffer FlagBuffer {
+    uint flags[];
+} flagBuffer;
+
+// 一次测试最多读这么多纹素。超过这个数量就不做判定，
+// 宁可漏剔也不能误剔
+const int MAX_TEXEL_COUNT = 1024;
+
+// 返回真表示包围盒被挡住。覆盖的纹素太多时返回假
+bool testOccluded(sampler2D pyramid, vec2 minUv, vec2 maxUv, float nearest, bool farthest)
+{
+    const ivec2 size = textureSize(pyramid, 0);
+    // 每个纹素覆盖的屏幕像素数由横向的整数倍给出，纵向按同一倍数换算。
+    // 屏幕边长不一定能被倍数整除，算出的下标超出金字塔行数时钳到最后一行
+    const float reduction = scene.viewportParams.x / float(size.x);
+    const vec2 scale = scene.viewportParams.xy / reduction;
+    // 两端取包含包围盒边缘的两个纹素，浮点边界外的部分由通道外处理
+    const ivec2 lo = clamp(ivec2(floor(minUv * scale)), ivec2(0), size - ivec2(1));
+    const ivec2 hi = clamp(ivec2(floor(maxUv * scale)), ivec2(0), size - ivec2(1));
+    if ((hi.x - lo.x + 1) * (hi.y - lo.y + 1) > MAX_TEXEL_COUNT) {
+        return false;
+    }
+
+    float reference = farthest ? 0.0 : 1.0;
+    for (int y = lo.y; y <= hi.y; ++y) {
+        for (int x = lo.x; x <= hi.x; ++x) {
+            const float sampleDepth = texelFetch(pyramid, ivec2(x, y), 0).r;
+            reference = farthest ? max(reference, sampleDepth) : min(reference, sampleDepth);
+        }
+    }
+
+    // 保守判定：包围盒的最近深度比整片纹素的最远深度还远，就一定被挡住
+    return nearest > reference;
+}
+
+void main()
+{
+    const uint instanceIndex = gl_GlobalInvocationID.x;
+    if (instanceIndex >= uint(scene.miscParams.x)) {
+        return;
+    }
+
+    const vec4 centerSize = instanceBuffer.instances[instanceIndex * 2];
+    const float halfExtent = centerSize.w * scene.viewportParams.z;
+
+    vec2 minUv = vec2(1e9);
+    vec2 maxUv = vec2(-1e9);
+    float nearest = 1e9;
+    bool behindCamera = false;
+
+    for (int corner = 0; corner < 8; ++corner) {
+        const vec3 offset = vec3(float((corner & 1) * 2 - 1), float(((corner >> 1) & 1) * 2 - 1),
+                                 float(((corner >> 2) & 1) * 2 - 1)) * halfExtent;
+        const vec4 clip = scene.viewProjection * vec4(centerSize.xyz + offset, 1.0);
+        if (clip.w <= 0.0) {
+            behindCamera = true;
+            break;
+        }
+        const vec2 ndc = clip.xy / clip.w;
+        minUv = min(minUv, ndc * 0.5 + 0.5);
+        maxUv = max(maxUv, ndc * 0.5 + 0.5);
+        nearest = min(nearest, clip.z / clip.w);
+    }
+
+    bool visible = true;
+    const bool offscreen = maxUv.x < 0.0 || maxUv.y < 0.0 || minUv.x > 1.0 || minUv.y > 1.0;
+    if (!behindCamera && !offscreen && scene.modeParams.x > 0.5) {
+        const bool farthest = scene.modeParams.y < 0.5;
+        // 层级选择：固定层级，或者按包围盒在最低一级上覆盖的纹素数抬高一级，
+        // 让测试的读取次数与包围盒覆盖的像素数无关
+        bool useLevel1 = scene.modeParams.z > 0.5;
+        if (scene.viewportParams.w > 0.5) {
+            const ivec2 level0Size = textureSize(pyramidLevel0, 0);
+            const float level0Reduction = scene.viewportParams.x / float(level0Size.x);
+            const vec2 level0Scale = scene.viewportParams.xy / level0Reduction;
+            const vec2 texelCount = (maxUv - minUv) * level0Scale;
+            useLevel1 = max(texelCount.x, texelCount.y) > 8.0;
+        }
+
+        bool occluded = false;
+        if (useLevel1) {
+            occluded = testOccluded(pyramidLevel1, minUv, maxUv, nearest, farthest);
+        } else {
+            occluded = testOccluded(pyramidLevel0, minUv, maxUv, nearest, farthest);
+        }
+        visible = !occluded;
+    }
+
+    // 只写标志位，可见列表由后续的有序压缩按实例编号顺序写出
+    flagBuffer.flags[instanceIndex] = visible ? 1u : 0u;
+}

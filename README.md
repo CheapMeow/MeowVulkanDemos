@@ -26,6 +26,7 @@
 | [`cases/bloom`](cases/bloom/README.md) | 泛光与亮部闪烁，对比三种降采样链、两种阈值与后处理顺序 |
 | [`cases/render_paths`](cases/render_paths/README.md) | 前向、延迟与分块前向三条渲染路径的耗时曲线对照 |
 | [`cases/ibl`](cases/ibl/README.md) | 基于图像的光照，对比分离求和与直接采样环境贴图 |
+| [`cases/hzb_culling`](cases/hzb_culling/README.md) | HZB 遮挡剔除，对比最远与最近深度两种极值取向 |
 | [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
 
 ## 目录结构

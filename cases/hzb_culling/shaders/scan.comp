@@ -1,0 +1,80 @@
+#version 450
+
+// 有序压缩：把剔除通道写下的标志做一次前缀和，按实例编号顺序写出可见列表。
+// 用原子加做压缩时写出顺序不确定，深度完全相同的像素会随绘制顺序换色；
+// 按编号顺序写出可以保证每一帧的绘制顺序完全一致。
+// 一个线程组负责 1024 乘 20 个元素，场景的实例数量要控制在这个范围内
+
+layout(local_size_x = 1024) in;
+
+layout(set = 0, binding = 0) uniform SceneBuffer {
+    mat4 viewProjection;
+    vec4 viewportParams;
+    vec4 modeParams;
+    vec4 miscParams;   // x 实例数量
+} scene;
+
+layout(set = 1, binding = 0) readonly buffer FlagBuffer {
+    uint flags[];
+} flagBuffer;
+
+layout(set = 1, binding = 1) writeonly buffer VisibleBuffer {
+    uint visible[];
+} visibleBuffer;
+
+layout(set = 1, binding = 2) buffer IndirectBuffer {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+} indirect;
+
+const uint ELEMENTS_PER_THREAD = 20;
+const uint THREAD_COUNT = 1024;
+
+shared uint threadCounts[THREAD_COUNT];
+
+void main()
+{
+    const uint threadIndex = gl_LocalInvocationID.x;
+    const uint first = threadIndex * ELEMENTS_PER_THREAD;
+    const uint instanceCount = uint(scene.miscParams.x);
+
+    uint localFlags[ELEMENTS_PER_THREAD];
+    uint localSum = 0u;
+    for (uint i = 0; i < ELEMENTS_PER_THREAD; ++i) {
+        const uint index = first + i;
+        localFlags[i] = index < instanceCount ? flagBuffer.flags[index] : 0u;
+        localSum += localFlags[i];
+    }
+
+    // 组内做一次前缀和，得到每个线程之前有多少个可见实例
+    threadCounts[threadIndex] = localSum;
+    barrier();
+    for (uint step = 1u; step < THREAD_COUNT; step <<= 1u) {
+        uint value = threadCounts[threadIndex];
+        if (threadIndex >= step) {
+            value += threadCounts[threadIndex - step];
+        }
+        barrier();
+        threadCounts[threadIndex] = value;
+        barrier();
+    }
+
+    uint offset = threadCounts[threadIndex] - localSum;
+    for (uint i = 0; i < ELEMENTS_PER_THREAD; ++i) {
+        if (localFlags[i] != 0u) {
+            visibleBuffer.visible[offset] = first + i;
+            offset += 1u;
+        }
+    }
+
+    if (threadIndex == 0u) {
+        indirect.indexCount = 36u;
+        indirect.instanceCount = threadCounts[THREAD_COUNT - 1u];
+        indirect.firstIndex = 0u;
+        indirect.vertexOffset = 0;
+        indirect.firstInstance = 0u;
+    }
+}
