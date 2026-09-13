@@ -273,12 +273,12 @@ void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigne
 
 void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t height, VkFormat format,
                              VkImageUsageFlags usage, VkImageAspectFlags aspect, GpuTexture& outTexture,
-                             VkSampleCountFlagBits samples)
+                             VkSampleCountFlagBits samples, uint32_t mipLevels)
 {
     outTexture = GpuTexture();
     outTexture.width = width;
     outTexture.height = height;
-    outTexture.mipLevels = 1;
+    outTexture.mipLevels = mipLevels;
 
     VkImageCreateInfo imageInfo = {};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -287,7 +287,7 @@ void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t 
     imageInfo.extent.width = width;
     imageInfo.extent.height = height;
     imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
+    imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = samples;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -312,7 +312,7 @@ void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t 
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = aspect;
-    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.layerCount = 1;
     VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, &outTexture.view));
 }

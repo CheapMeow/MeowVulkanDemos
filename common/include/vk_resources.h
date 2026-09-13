@@ -48,9 +48,10 @@ void createTextureFromMemory(const VulkanContext& ctx, const std::vector<unsigne
 void createTextureFromRgba(const VulkanContext& ctx, uint32_t width, uint32_t height,
                            const unsigned char* pixels, bool srgb, GpuTexture& outTexture,
                            VkImageView* outAlternateView = nullptr);
+// 建一张可以作为附件或者存储图像使用的纹理。mipLevels 大于 1 时视图覆盖整条多级渐远纹理链
 void createAttachmentTexture(const VulkanContext& ctx, uint32_t width, uint32_t height, VkFormat format,
                              VkImageUsageFlags usage, VkImageAspectFlags aspect, GpuTexture& outTexture,
-                             VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+                             VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT, uint32_t mipLevels = 1);
 void destroyTexture(const VulkanContext& ctx, GpuTexture& texture);
 
 VkSampler createLinearSampler(const VulkanContext& ctx, uint32_t mipLevels);

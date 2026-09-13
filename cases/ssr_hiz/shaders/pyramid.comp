@@ -1,0 +1,48 @@
+#version 450
+
+// 金字塔：第一级把深度原样抄下来，之后每一级取上一级二乘二小块的最小值或平均值。
+// 取最小值的金字塔可以整块断言"射线整段都在这一块最前面"，跳过安全且不漏检；
+// 取平均值的金字塔没有这个性质，用它做整块跳过会漏掉交点
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourceImage;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D destImage;
+
+layout(push_constant) uniform Params {
+    vec4 size;      // xy 源尺寸, zw 目标尺寸
+    vec4 options;   // x 缩减倍数, y 取平均值, z 源纹理层级
+} pc;
+
+void main()
+{
+    const ivec2 dest = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 destSize = ivec2(pc.size.zw);
+    if (dest.x >= destSize.x || dest.y >= destSize.y) {
+        return;
+    }
+
+    const ivec2 sourceSize = ivec2(pc.size.xy);
+    const int reduction = int(pc.options.x);
+    const bool average = pc.options.y > 0.5;
+    const int sourceLevel = int(pc.options.z);
+
+    float value = average ? 0.0 : 1.0;
+    int sampleCount = 0;
+    for (int y = 0; y < reduction; ++y) {
+        for (int x = 0; x < reduction; ++x) {
+            const ivec2 sourceTexel = dest * reduction + ivec2(x, y);
+            if (sourceTexel.x >= sourceSize.x || sourceTexel.y >= sourceSize.y) {
+                continue;
+            }
+            const float sampleDepth = texelFetch(sourceImage, sourceTexel, sourceLevel).r;
+            value = average ? value + sampleDepth : min(value, sampleDepth);
+            ++sampleCount;
+        }
+    }
+    if (average && sampleCount > 0) {
+        value /= float(sampleCount);
+    }
+
+    imageStore(destImage, dest, vec4(value));
+}
