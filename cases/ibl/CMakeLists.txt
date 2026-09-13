@@ -1,0 +1,22 @@
+# ibl case：基于图像的光照与分离求和
+meow_add_case(ibl
+    SOURCES
+        src/renderer.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/fullscreen.vert
+        shaders/environment.frag
+        shaders/irradiance.frag
+        shaders/prefilter.frag
+        shaders/brdf_lut.frag
+        shaders/box.vert
+        shaders/pbr.frag
+        shaders/present.frag
+    SHADER_INCLUDES
+        shaders/sky_common.glsl
+)
