@@ -15,6 +15,7 @@
 | [`cases/draw_cost`](cases/draw_cost/README.md) | 绘制命令的固定成本，对比状态排序、重复绑定与渲染通道段数 |
 | [`cases/shadow_extended`](cases/shadow_extended/README.md) | 级联阴影、PCSS 与矩阴影，对比级数、取值方式与坐标计算位置 |
 | [`cases/msaa`](cases/msaa/README.md) | 多重采样的覆盖范围与着色次数，对比采样数、解析方式与 alpha to coverage |
+| [`cases/alpha_modes`](cases/alpha_modes/README.md) | alpha test、alpha blend 与 alpha to coverage 的边缘对照 |
 | [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
 
 ## 目录结构
