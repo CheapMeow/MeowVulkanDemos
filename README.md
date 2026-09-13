@@ -24,6 +24,7 @@
 | [`cases/ssao`](cases/ssao/README.md) | 屏幕空间环境光遮蔽，对比遮蔽量乘到环境光与全部光照 |
 | [`cases/subpass_tile`](cases/subpass_tile/README.md) | 延迟渲染的子通道与片上存储，对比两条分段路径与乒乓 |
 | [`cases/bloom`](cases/bloom/README.md) | 泛光与亮部闪烁，对比三种降采样链、两种阈值与后处理顺序 |
+| [`cases/render_paths`](cases/render_paths/README.md) | 前向、延迟与分块前向三条渲染路径的耗时曲线对照 |
 | [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
 
 ## 目录结构

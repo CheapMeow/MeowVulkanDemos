@@ -1,0 +1,19 @@
+# render_paths case：前向、延迟与分块前向的对照
+meow_add_case(render_paths
+    SOURCES
+        src/renderer.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/scene.vert
+        shaders/gbuffer.frag
+        shaders/forward.frag
+        shaders/deferred_lighting.frag
+        shaders/fullscreen.vert
+        shaders/present.frag
+        shaders/tile.comp
+)

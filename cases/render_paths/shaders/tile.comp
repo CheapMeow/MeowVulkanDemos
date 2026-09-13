@@ -1,0 +1,69 @@
+#version 450
+
+// 分块光源列表：每个八乘八的块把所有光源投影到屏幕，落在块附近的写进本块的列表
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform SceneBuffer {
+    mat4 viewProjection;
+    vec4 viewportParams;   // xy 视口尺寸, z 分块尺寸, w 每块的光源上限
+    vec4 modeParams;       // x 路径, y 光源数量, z 保留, w 时间
+    vec4 miscParams;
+} scene;
+
+layout(set = 0, binding = 2) readonly buffer LightBuffer {
+    vec4 lights[];
+} lightBuffer;
+
+layout(set = 1, binding = 0) buffer TileBuffer {
+    uvec4 tiles[];  // x 光源数, yzw 前三个光源编号
+} tileBuffer;
+
+layout(set = 1, binding = 1) writeonly buffer TileLightBuffer {
+    uint indices[];
+} tileLights;
+
+void main()
+{
+    const uint tileSize = uint(scene.viewportParams.z);
+    const uint tilesPerRow = (uint(scene.viewportParams.x) + tileSize - 1u) / tileSize;
+    const uint tilesPerColumn = (uint(scene.viewportParams.y) + tileSize - 1u) / tileSize;
+
+    const uvec2 tile = gl_GlobalInvocationID.xy;
+    if (tile.x >= tilesPerRow || tile.y >= tilesPerColumn) {
+        return;
+    }
+
+    const uint tileIndex = tile.y * tilesPerRow + tile.x;
+    const uint maxPerTile = uint(scene.viewportParams.w);
+
+    const vec2 tileMin = (vec2(tile) * float(tileSize)) / scene.viewportParams.xy * 2.0 - 1.0;
+    const vec2 tileMax = (vec2(tile + uvec2(1u)) * float(tileSize)) / scene.viewportParams.xy * 2.0 - 1.0;
+
+    uint count = 0u;
+    uvec3 firstThree = uvec3(0u);
+    for (uint i = 0u; i < uint(scene.modeParams.y); ++i) {
+        const vec4 lightPosition = lightBuffer.lights[i * 2];
+        const vec4 clip = scene.viewProjection * vec4(lightPosition.xyz, 1.0);
+        if (clip.w <= 0.0) {
+            continue;
+        }
+        const vec2 ndc = clip.xy / clip.w;
+        // 光源在屏幕上的半径按距离粗算
+        const float radiusNdc = lightPosition.w * 0.35 / max(clip.w, 0.001);
+        if (ndc.x + radiusNdc < tileMin.x || ndc.x - radiusNdc > tileMax.x ||
+            ndc.y + radiusNdc < tileMin.y || ndc.y - radiusNdc > tileMax.y) {
+            continue;
+        }
+        if (count < maxPerTile) {
+            if (count < 3u) {
+                firstThree[count] = i;
+            } else {
+                tileLights.indices[tileIndex * maxPerTile + count] = i;
+            }
+            ++count;
+        }
+    }
+
+    tileBuffer.tiles[tileIndex] = uvec4(count, firstThree.x, firstThree.y, firstThree.z);
+}
