@@ -1,0 +1,19 @@
+# low_res case：低分辨率层与引导式上采样
+meow_add_case(low_res
+    SOURCES
+        src/renderer.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/scene.vert
+        shaders/scene.frag
+        shaders/fullscreen.vert
+        shaders/downgrade.frag
+        shaders/glow.frag
+        shaders/glow_geometry.frag
+        shaders/composite.frag
+)
