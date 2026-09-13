@@ -21,6 +21,7 @@
 | [`cases/low_res`](cases/low_res/README.md) | 低分辨率层与引导式上采样，对比双线性与深度法线加权 |
 | [`cases/outline`](cases/outline/README.md) | 后处理描边与双 Pass 外扩，对比阈值敏感度与线宽随距离的变化 |
 | [`cases/shader_throughput`](cases/shader_throughput/README.md) | 着色吞吐微基准，对比算力密集、采样密集与分支发散 |
+| [`cases/ssao`](cases/ssao/README.md) | 屏幕空间环境光遮蔽，对比遮蔽量乘到环境光与全部光照 |
 | [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
 
 ## 目录结构
