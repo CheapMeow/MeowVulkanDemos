@@ -1,0 +1,8 @@
+#version 450
+
+// 中精度版本：只有默认精度与高精度版本不同。桌面显卡上两者都编译成 32 位浮点，
+// 差别要在支持 16 位浮点的安卓设备上才看得到
+
+precision mediump float;
+
+#include "throughput_common.glsl"

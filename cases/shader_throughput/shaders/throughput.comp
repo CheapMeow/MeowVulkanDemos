@@ -1,0 +1,6 @@
+#version 450
+
+// 高精度版本：桌面与安卓都用 32 位浮点
+precision highp float;
+
+#include "throughput_common.glsl"
