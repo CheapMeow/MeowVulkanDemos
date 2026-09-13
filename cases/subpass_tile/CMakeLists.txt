@@ -1,0 +1,19 @@
+# subpass_tile case：延迟渲染的子通道与片上存储
+meow_add_case(subpass_tile
+    SOURCES
+        src/renderer.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/gbuffer.vert
+        shaders/gbuffer.frag
+        shaders/deferred_lighting.frag
+        shaders/subpass_lighting.frag
+        shaders/fullscreen.vert
+        shaders/pingpong.frag
+        shaders/present.frag
+)
