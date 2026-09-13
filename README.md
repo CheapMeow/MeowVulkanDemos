@@ -19,6 +19,7 @@
 | [`cases/thin_geometry`](cases/thin_geometry/README.md) | 亚像素细物体，对比无抗锯齿、多重采样与 FXAA 后处理 |
 | [`cases/transparency`](cases/transparency/README.md) | 半透明排序与顺序无关透明，对比源混合、加权混合与逐像素链表 |
 | [`cases/low_res`](cases/low_res/README.md) | 低分辨率层与引导式上采样，对比双线性与深度法线加权 |
+| [`cases/outline`](cases/outline/README.md) | 后处理描边与双 Pass 外扩，对比阈值敏感度与线宽随距离的变化 |
 | [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
 
 ## 目录结构

@@ -1,0 +1,19 @@
+# outline case：后处理描边与双 Pass 外扩
+meow_add_case(outline
+    SOURCES
+        src/renderer.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/scene.vert
+        shaders/scene.frag
+        shaders/hull.vert
+        shaders/hull.frag
+        shaders/fullscreen.vert
+        shaders/outline.frag
+        shaders/present.frag
+)
