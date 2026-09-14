@@ -77,12 +77,24 @@ graph LR
 
 只写背面深度决定阴影管线的剔除面，改动时重建管线；法线抬升、掠射角放大偏移与基础深度偏移只进 uniform，不触发重建。
 
+> 对于平面这种单层物体，“只写背面深度”无效。原因显然，它的正面和背面的深度一致。
+
+> 实际测试发现“掠射角放大偏移”似乎没有效果？例如，测试平面的自阴影时，调整“基础深度偏移”为恰好到再增大一点就可以消除自阴影的程度，然后再开启“掠射角放大偏移”，发现自阴影没有改善。
+
 ### 百分比渐近软阴影
 
 PCF 的过滤半径是常数，阴影边界的宽度不随遮挡物的远近变化；真实的面光源在接收点被近处遮挡物挡住时
 半影窄，被远处遮挡物挡住时半影宽。PCSS 用两步把这个关系补上：先在接收点周围一个搜索半径内统计落在
 接收点之前的纹素，得到遮挡物的平均深度；接收点到遮挡物的距离与遮挡物到光源的距离之比决定半影宽度，
 遮挡物离得越远半影越宽；最后在这个半影宽度上做过滤。搜索半径内一个遮挡物都没有时这一点按完全受光处理。
+
+PCF
+
+![alt text](./images/PCF_showcase.png)
+
+PCSS
+
+![alt text](./images/PCSS_showcase.png)
 
 半影宽度按光源正交投影下的深度换算。那个投影里深度沿光线方向线性变化，归一化深度乘上远近平面间距再
 加上近平面就是光源到表面的距离，所以距离之比只需要一个常数项就能算出来。换算出的是世界单位的半影，
@@ -113,6 +125,157 @@ PCSS 的半影面积比 PCF 大，并且随光源半径增长；增长到 1200 �
 
 PCSS 每次受光比例计算要读五十个纹素，PCF 只要九个，但主通道的这点增量在这套装满两千个实例的
 2048 见方阴影通道面前只有 0.045 毫秒，整帧的时间几乎都被阴影通道本身占着。
+
+### 三种模式的公式与源码对应
+
+三种模式共用同一套投影与深度比较，区别只在受光比例的计算方式。
+
+#### 投影与深度写入
+
+阴影通道的顶点着色器把世界位置变换到光源裁剪空间（`shadow.vert:15`），主通道在片元着色器里对同一个世界位置再做一次投影（`scene_common.glsl:41-46`）：
+
+```glsl
+vec4 clip = scene.lightViewProj * vec4(worldPosition, 1.0);
+vec3 projected = clip.xyz / clip.w;
+vec2 uv = projected.xy * 0.5 + 0.5;
+```
+
+写成公式：
+
+```text
+uv    = clip.xy / clip.w * 0.5 + 0.5
+depth = clip.z  / clip.w
+```
+
+裁剪坐标的 x、y 从 -1 到 1 映射到纹理坐标的 0 到 1。光源用正交投影，clip.w 恒为 1，`depth` 就是世界位置在光源空间的线性深度。
+
+阴影通道把窗口深度写进颜色附件的第 0 个通道（`shadow.frag:9`）：
+
+```glsl
+outDepth = gl_FragCoord.z;
+```
+
+光栅化得到的 `gl_FragCoord.z` 与主通道的 `depth` 来自同一个矩阵，两者可以直接比较。
+
+#### 深度比较
+
+`shadow_sampling.glsl:7-10`：
+
+```glsl
+return referenceDepth <= texture(shadowMap, uv).r ? 1.0 : 0.0;
+```
+
+```text
+lit(d_ref, uv) = 1,  d_ref <= d_map(uv)
+               = 0,  d_ref >  d_map(uv)
+```
+
+#### 参考深度的偏移
+
+比较之前先压低参考深度，可选地沿法线抬起采样位置（`shadow_sampling.glsl:90-103`）：
+
+```glsl
+vec3 liftedPosition = worldPosition + normal * (scene.shadowOptions.z * scene.shadowOptions.x);
+float bias = scene.shadowParams.x;
+if (scene.shadowOptions.y > 0.5) {
+    bias = max(bias * (1.0 - nDotL), bias);
+}
+float referenceDepth = projected.z - bias;
+```
+
+```text
+d_ref = depth - bias
+```
+
+参考深度的修正由三部分组成。抬升距离是 `shadowOptions.z * shadowOptions.x`，其中 `shadowOptions.x` 是开关，`shadowOptions.z` 是一个纹素对应的世界宽度 `2 * radius / mapSize`，`radius` 取正交视锥半边长（`main.cpp:107`）。基础项 `shadowParams.x` 是界面上的基础深度偏移（`main.cpp:104`）。掠射角项由 `shadowOptions.y` 开关，表达式是 `max(bias * (1.0 - nDotL), bias)`，`nDotL` 落在 0 到 1 之间，`bias * (1.0 - nDotL)` 随之落在 0 到 `bias` 之间，`max` 取回 `bias`，所以偏移量在各种入射角下都等于基础偏移。
+
+#### 硬阴影
+
+`filterShadow` 在半径为零时直接返回一次比较（`shadow_sampling.glsl:14-18`）：
+
+```glsl
+if (radius <= 0.0) {
+    return litFromDepth(referenceDepth, uv);
+}
+```
+
+#### PCF
+
+三乘三的格点，间距是 PCF 半径个纹素（`shadow_sampling.glsl:20-27`）：
+
+```text
+offset(x, y) = (x, y) * texel * radius           x, y ∈ {-1, 0, 1}
+visibility   = (1/9) * Σ lit(d_ref, uv + offset(x, y))
+```
+
+```glsl
+const vec2 offset = vec2(float(x), float(y)) * scene.shadowParams.y * radius;
+```
+
+`texel = shadowParams.y = 1 / mapSize`（`main.cpp:104`），`radius = shadowParams.z` 是界面上的 PCF 半径。过滤核固定为九个采样点，`radius` 只改变采样间距，过滤核沿单轴覆盖 ±radius 个纹素。
+
+#### PCSS 的遮挡物搜索
+
+五乘五的格点，间距是半个搜索半径（`shadow_sampling.glsl:45-60`）：
+
+```text
+offset(x, y) = (x, y) * texel * R * 0.5          x, y ∈ {-2, -1, 0, 1, 2}
+blockerDepth = mean{ d_map(uv + offset(x, y)) : d_ref > d_map(uv + offset(x, y)) }
+             = -1                                没有纹素满足条件时
+```
+
+`R = shadowPcss.x` 是搜索半径（纹素），沿单轴的最大偏移是 `texel * R`，搜索范围覆盖 ±R 个纹素。
+
+#### PCSS 的半影宽度
+
+先把归一化深度还原成光源到表面的距离。正交投影下深度沿光线方向线性变化（`main.cpp:109-111`）：
+
+```text
+t = z * (far - near) + near
+```
+
+其中 `near = 0.1`，`far = radius * 6`。接收点到遮挡物的距离与遮挡物到光源的距离分别是 `t_ref - t_blocker` 与 `t_blocker`，两者的比值（`shadow_sampling.glsl:73-74`）：
+
+```text
+ratio = (t_ref - t_blocker) / t_blocker
+      = (z_ref - z_blocker) / (z_blocker + near / (far - near))
+```
+
+分母里的 `near / (far - near)` 就是 `shadowOptions.w`，分子是 `referenceDepth - blockerDepth`，距离之比因此只靠一个常数项就能算出来。光源半径按纹素换算后存进 `shadowPcss.y`（`main.cpp:116-117`）：
+
+```text
+shadowPcss.y = lightRadius * mapSize / (2 * radius)
+```
+
+`2 * radius` 是正交视锥的世界宽度，`mapSize` 是贴图边长，两者之比把世界单位换成纹素。半影宽度是比值与 `shadowPcss.y` 的乘积，再夹在 `shadowPcss.z` 与 `shadowPcss.w` 之间（`shadow_sampling.glsl:75-76`）：
+
+```text
+penumbra = clamp(ratio * shadowPcss.y, shadowPcss.z, shadowPcss.w)
+```
+
+`shadowPcss.z` 与 `shadowPcss.w` 是界面上的最小半影与最大半影，单位是纹素（`main.cpp:117-118`）。把纹素单位换回世界单位：一个纹素的世界宽度是 `2 * radius / mapSize`，`penumbra * (2 * radius / mapSize) = ratio * lightRadius`，也就是 (d1 / d2) * 光源半径。完整半影宽度是这个值的两倍，等于光源直径乘以 d1 / d2，与相似三角形得到的结论一致。
+
+#### PCSS 的半影过滤
+
+五乘五的格点，间距是半个半影宽度（`shadow_sampling.glsl:31-41`）：
+
+```text
+offset(x, y) = (x, y) * texel * penumbra * 0.5   x, y ∈ {-2, -1, 0, 1, 2}
+visibility   = (1/25) * Σ lit(d_ref, uv + offset(x, y))
+```
+
+沿单轴的最大偏移是 `texel * penumbra`，过滤核覆盖 ±penumbra 个纹素，正好等于上一步算出的半影半宽。
+
+#### 模式分派
+
+`sampleShadow` 先处理两个退化情形：模式为零时返回 1（`shadow_sampling.glsl:84-87`），投影落在贴图范围之外时返回 1（`shadow_sampling.glsl:93-96`）。其余情形按模式分派（`shadow_sampling.glsl:105-108`）：
+
+```glsl
+if (mode >= 2) {
+    return samplePcss(referenceDepth, projected.xy);
+}
+return filterShadow(referenceDepth, projected.xy, scene.shadowParams.z);
+```
 
 ### 地面是否参与投影
 
