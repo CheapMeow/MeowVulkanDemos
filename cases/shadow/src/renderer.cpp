@@ -14,6 +14,10 @@ static const VkFormat MAIN_DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
 // 阴影通道的深度测试附件，只用来挑出离光源最近的背面，不被采样
 static const VkFormat SHADOW_TEST_DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
 
+// 方差软阴影的矩用两通道的 32 位浮点。深度的平方存在贴图分辨率下，
+// 量化档距远大于区域内深度的方差，位数低于 32 位时方差会整片塌成零，估不出半影
+static const VkFormat SHADOW_MOMENT_FORMAT = VK_FORMAT_R32G32_SFLOAT;
+
 VkFormat shadowMapColorFormat(uint32_t bits)
 {
     if (bits == 8) {
@@ -27,6 +31,23 @@ VkFormat shadowMapColorFormat(uint32_t bits)
     }
     FATAL("unsupported shadow map bit depth: %u", bits);
     return VK_FORMAT_UNDEFINED;
+}
+
+// 方差软阴影按金字塔的层级取值，滤波要在线性过滤下做，层与层之间还要插值，
+// 深度模式那种最近邻采样器会把矩摊成台阶
+static void createShadowMomentSampler(const VulkanContext& ctx, ShadowRenderer& renderer)
+{
+    VkSamplerCreateInfo samplerInfo = {};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    // 取哪一级由着色器按区域大小算好，这里不做钳制
+    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+    VK_CHECK(vkCreateSampler(ctx.device, &samplerInfo, nullptr, &renderer.shadowMomentSampler));
 }
 
 static void createShadowSampler(const VulkanContext& ctx, ShadowRenderer& renderer)
@@ -51,8 +72,10 @@ static void createShadowRenderPass(const VulkanContext& ctx, ShadowRenderer& ren
 {
     VkAttachmentDescription attachments[2] = {};
 
-    // 保存深度值的颜色附件，主通道以采样方式读取
-    attachments[0].format = shadowMapColorFormat(renderer.shadowMapBits);
+    // 保存深度值的颜色附件，主通道以采样方式读取；方差软阴影下保存的是深度的矩，
+    // 通道本身还要被计算着色器来回读写，因此布局取通用的那一种
+    attachments[0].format = renderer.shadowMoments ? SHADOW_MOMENT_FORMAT
+                                                   : shadowMapColorFormat(renderer.shadowMapBits);
     attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -60,7 +83,8 @@ static void createShadowRenderPass(const VulkanContext& ctx, ShadowRenderer& ren
     attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     // 阴影通道结束后主通道以采样方式读取，布局在这里就转到只读
-    attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    attachments[0].finalLayout = renderer.shadowMoments ? VK_IMAGE_LAYOUT_GENERAL
+                                                        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     // 只用于深度测试的深度附件，内容不需要保留
     attachments[1].format = SHADOW_TEST_DEPTH_FORMAT;
@@ -86,11 +110,13 @@ static void createShadowRenderPass(const VulkanContext& ctx, ShadowRenderer& ren
     subpass.pColorAttachments = &colorRef;
     subpass.pDepthStencilAttachment = &depthRef;
 
-    // 上一帧主通道读过阴影贴图，写入前先等它读完；写完之后再交给片元着色器采样
+    // 上一帧主通道读过阴影贴图，写入前先等它读完；写完之后再交给片元着色器采样，
+    // 方差软阴影下写出的是矩，接着交给计算着色器收缩金字塔
     VkSubpassDependency dependencies[2] = {};
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -100,7 +126,8 @@ static void createShadowRenderPass(const VulkanContext& ctx, ShadowRenderer& ren
     dependencies[1].srcSubpass = 0;
     dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
@@ -173,18 +200,50 @@ static void createMainRenderPass(const VulkanContext& ctx, ShadowRenderer& rende
     VK_CHECK(vkCreateRenderPass(ctx.device, &renderPassInfo, nullptr, &renderer.mainRenderPass));
 }
 
+// 金字塔的级数：边长逐级折半到一
+static uint32_t momentMipCount(uint32_t size)
+{
+    uint32_t count = 1;
+    while ((size >>= 1) != 0) {
+        ++count;
+    }
+    return count;
+}
+
 static void createShadowTargets(const VulkanContext& ctx, ShadowRenderer& renderer)
 {
     const uint32_t size = renderer.shadowMapSize;
+    const VkFormat mapFormat =
+        renderer.shadowMoments ? SHADOW_MOMENT_FORMAT : shadowMapColorFormat(renderer.shadowMapBits);
+    renderer.shadowMipCount = renderer.shadowMoments ? momentMipCount(size) : 1;
 
-    createAttachmentTexture(ctx, size, size, shadowMapColorFormat(renderer.shadowMapBits),
-                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                            VK_IMAGE_ASPECT_COLOR_BIT, renderer.shadowMap);
+    VkImageUsageFlags mapUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (renderer.shadowMoments) {
+        // 金字塔的其余各级由计算着色器写进同一张贴图的对应层级
+        mapUsage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    }
+    createAttachmentTexture(ctx, size, size, mapFormat, mapUsage, VK_IMAGE_ASPECT_COLOR_BIT,
+                            renderer.shadowMap, VK_SAMPLE_COUNT_1_BIT, renderer.shadowMipCount);
+
+    // 单级的视图给帧缓冲与存储图像用，整条链的视图给主通道采样用
+    for (uint32_t level = 0; level < renderer.shadowMipCount; ++level) {
+        VkImageViewCreateInfo viewInfo = {};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = renderer.shadowMap.image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = mapFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = level;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        VK_CHECK(vkCreateImageView(ctx.device, &viewInfo, nullptr, &renderer.shadowMipViews[level]));
+    }
+
     createAttachmentTexture(ctx, size, size, SHADOW_TEST_DEPTH_FORMAT,
                             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
                             renderer.shadowDepth);
 
-    VkImageView views[2] = { renderer.shadowMap.view, renderer.shadowDepth.view };
+    VkImageView views[2] = { renderer.shadowMipViews[0], renderer.shadowDepth.view };
     VkFramebufferCreateInfo framebufferInfo = {};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferInfo.renderPass = renderer.shadowRenderPass;
@@ -196,27 +255,34 @@ static void createShadowTargets(const VulkanContext& ctx, ShadowRenderer& render
     VK_CHECK(vkCreateFramebuffer(ctx.device, &framebufferInfo, nullptr, &renderer.shadowFramebuffer));
 
     // 创建时先转到只读布局：关闭阴影时不跑阴影通道，主通道仍然绑定着这张贴图，
-    // 布局必须与描述符里声明的只读布局一致
+    // 布局必须与描述符里声明的布局一致。矩要交给片元着色器之外的计算着色器读写，整条链取通用布局
     VkCommandBuffer commandBuffer = beginOneTimeCommands(ctx);
     VkImageMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.newLayout = renderer.shadowMoments ? VK_IMAGE_LAYOUT_GENERAL
+                                               : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrier.srcAccessMask = 0;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = renderer.shadowMap.image;
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.levelCount = renderer.shadowMipCount;
     barrier.subresourceRange.layerCount = 1;
     vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                         nullptr, 0, nullptr, 1, &barrier);
     endOneTimeCommands(ctx, commandBuffer);
 }
 
 static void destroyShadowTargets(const VulkanContext& ctx, ShadowRenderer& renderer)
 {
+    for (uint32_t level = 0; level < renderer.shadowMipCount; ++level) {
+        vkDestroyImageView(ctx.device, renderer.shadowMipViews[level], nullptr);
+        renderer.shadowMipViews[level] = VK_NULL_HANDLE;
+    }
+    renderer.shadowMipCount = 0;
     vkDestroyFramebuffer(ctx.device, renderer.shadowFramebuffer, nullptr);
     renderer.shadowFramebuffer = VK_NULL_HANDLE;
     destroyTexture(ctx, renderer.shadowDepth);
@@ -294,22 +360,44 @@ static void createDescriptorLayouts(const VulkanContext& ctx, ShadowRenderer& re
     materialLayoutInfo.bindingCount = 6;
     materialLayoutInfo.pBindings = materialBindings;
     VK_CHECK(vkCreateDescriptorSetLayout(ctx.device, &materialLayoutInfo, nullptr, &renderer.materialSetLayout));
+
+    // 矩金字塔的收缩：读上一级，写这一级
+    VkDescriptorSetLayoutBinding momentReduceBindings[2] = {};
+    momentReduceBindings[0].binding = 0;
+    momentReduceBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    momentReduceBindings[0].descriptorCount = 1;
+    momentReduceBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    momentReduceBindings[1].binding = 1;
+    momentReduceBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    momentReduceBindings[1].descriptorCount = 1;
+    momentReduceBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo momentReduceLayoutInfo = {};
+    momentReduceLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    momentReduceLayoutInfo.bindingCount = 2;
+    momentReduceLayoutInfo.pBindings = momentReduceBindings;
+    VK_CHECK(vkCreateDescriptorSetLayout(ctx.device, &momentReduceLayoutInfo, nullptr,
+                                         &renderer.momentReduceSetLayout));
 }
 
 static void createDescriptorPool(const VulkanContext& ctx, ShadowRenderer& renderer)
 {
-    VkDescriptorPoolSize poolSizes[3] = {};
+    VkDescriptorPoolSize poolSizes[4] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = 8;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[1].descriptorCount = 8;
+    // 材质描述符占六个，矩金字塔的每级各占一个
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[2].descriptorCount = 16;
+    poolSizes[2].descriptorCount = 32;
+    poolSizes[3].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    poolSizes[3].descriptorCount = SHADOW_MAX_MIP_COUNT;
 
     VkDescriptorPoolCreateInfo poolInfo = {};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 16;
-    poolInfo.poolSizeCount = 3;
+    // 材质描述符一个、每帧的场描述符各一个、矩金字塔的每级各一个
+    poolInfo.maxSets = 4 + SHADOW_MAX_MIP_COUNT;
+    poolInfo.poolSizeCount = 4;
     poolInfo.pPoolSizes = poolSizes;
     VK_CHECK(vkCreateDescriptorPool(ctx.device, &poolInfo, nullptr, &renderer.descriptorPool));
 }
@@ -352,8 +440,10 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
     VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.shadowPipelineLayout));
 
     VkShaderModule vertexModule = loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/shadow.vert.spv"));
-    VkShaderModule fragmentModule =
-        loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/shadow.frag.spv"));
+    // 方差软阴影写出一阶与二阶矩，其余模式写出深度值
+    VkShaderModule fragmentModule = loadShaderModuleFromMemory(
+        ctx, readAssetBytes(renderer.shadowMoments ? DEMO_SHADER_DIR "/shadow_moments.frag.spv"
+                                                  : DEMO_SHADER_DIR "/shadow.frag.spv"));
 
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0] = makeShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vertexModule);
@@ -391,9 +481,11 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
     depthStencil.depthWriteEnable = VK_TRUE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
 
-    // 颜色附件只保存深度值，写入 R 通道
+    // 颜色附件保存深度值，写入 R 通道；保存矩时要多写一个通道
     VkPipelineColorBlendAttachmentState blendAttachment = {};
-    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+    blendAttachment.colorWriteMask = renderer.shadowMoments
+                                         ? VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                                         : VK_COLOR_COMPONENT_R_BIT;
 
     VkPipelineColorBlendStateCreateInfo colorBlend = {};
     colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -447,6 +539,65 @@ static void createShadowPipeline(const VulkanContext& ctx, ShadowRenderer& rende
 
     vkDestroyShaderModule(ctx.device, fragmentModule, nullptr);
     vkDestroyShaderModule(ctx.device, vertexModule, nullptr);
+}
+
+// 矩金字塔的收缩管线：每次调度读上一级的层级、写这一级的层级，两级都在同一张贴图上
+static void createMomentReducePipeline(const VulkanContext& ctx, ShadowRenderer& renderer)
+{
+    // 源尺寸、目标尺寸与源层级
+    VkPushConstantRange pushRange = {};
+    pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushRange.size = 5 * sizeof(int32_t);
+
+    VkPipelineLayoutCreateInfo layoutInfo = {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &renderer.momentReduceSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    VK_CHECK(vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &renderer.momentReducePipelineLayout));
+
+    VkShaderModule module =
+        loadShaderModuleFromMemory(ctx, readAssetBytes(DEMO_SHADER_DIR "/shadow_moments_reduce.comp.spv"));
+
+    VkPipelineShaderStageCreateInfo stage = makeShaderStage(VK_SHADER_STAGE_COMPUTE_BIT, module);
+
+    VkComputePipelineCreateInfo pipelineInfo = {};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage = stage;
+    pipelineInfo.layout = renderer.momentReducePipelineLayout;
+    VK_CHECK(vkCreateComputePipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                      &renderer.momentReducePipeline));
+
+    vkDestroyShaderModule(ctx.device, module, nullptr);
+
+    // 贴图尺寸决定级数，级数随尺寸变化，描述符集一次按最高级数分配好，之后只改指向的对象
+    for (uint32_t level = 1; level < SHADOW_MAX_MIP_COUNT; ++level) {
+        renderer.momentReduceSets[level] =
+            allocateDescriptorSet(ctx, renderer.descriptorPool, renderer.momentReduceSetLayout);
+    }
+}
+
+// 贴图重建后每一级的收缩要指向新的层级视图
+static void writeMomentReduceSets(const VulkanContext& ctx, ShadowRenderer& renderer)
+{
+    for (uint32_t level = 1; level < renderer.shadowMipCount; ++level) {
+        writeImageDescriptor(ctx, renderer.momentReduceSets[level], 0, renderer.shadowMap.view,
+                             renderer.shadowMomentSampler, VK_IMAGE_LAYOUT_GENERAL);
+
+        VkDescriptorImageInfo imageInfo = {};
+        imageInfo.imageView = renderer.shadowMipViews[level];
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkWriteDescriptorSet write = {};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = renderer.momentReduceSets[level];
+        write.dstBinding = 1;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        write.pImageInfo = &imageInfo;
+        vkUpdateDescriptorSets(ctx.device, 1, &write, 0, nullptr);
+    }
 }
 
 // 物体与地面共用顶点着色器，只有片元着色器与剔除方式不同：地面是单面几何，不做背面剔除
@@ -566,6 +717,16 @@ static void createMeshBuffers(const VulkanContext& ctx, const MeshData& mesh, Gp
     uploadBufferData(ctx, indexBuffer, mesh.indices.data(), indexBytes);
 }
 
+// 主通道在绑定 5 上采样阴影贴图：深度模式取样一个通道、最近邻、只读布局，
+// 方差软阴影取矩、线性过滤、通用布局
+static void writeShadowMapDescriptor(const VulkanContext& ctx, ShadowRenderer& renderer)
+{
+    writeImageDescriptor(ctx, renderer.materialSet, 5, renderer.shadowMap.view,
+                         renderer.shadowMoments ? renderer.shadowMomentSampler : renderer.shadowSampler,
+                         renderer.shadowMoments ? VK_IMAGE_LAYOUT_GENERAL
+                                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
 void createRenderer(const VulkanContext& ctx, ShadowRenderer& renderer, const MeshData& objectMesh,
                     const MeshData& groundMesh, const std::vector<InstanceData>& instances,
                     uint32_t groundInstanceIndex, const ShadowOptions& shadowOptions)
@@ -576,6 +737,7 @@ void createRenderer(const VulkanContext& ctx, ShadowRenderer& renderer, const Me
     renderer.shadowMapSize = shadowOptions.mapSize;
     renderer.shadowMapBits = shadowOptions.mapBits;
     renderer.shadowBackFaceDepth = shadowOptions.backFaceDepth;
+    renderer.shadowMoments = shadowOptions.moments;
 
     // 时间戳查询支持由设备能力决定，桌面与安卓都按同一套规则探测
     uint32_t queueFamilyCount = 0;
@@ -599,6 +761,7 @@ void createRenderer(const VulkanContext& ctx, ShadowRenderer& renderer, const Me
     createBackpackMaterialTextures(ctx, renderer.material);
 
     createShadowSampler(ctx, renderer);
+    createShadowMomentSampler(ctx, renderer);
     createShadowRenderPass(ctx, renderer);
     createMainRenderPass(ctx, renderer);
     createShadowTargets(ctx, renderer);
@@ -607,6 +770,7 @@ void createRenderer(const VulkanContext& ctx, ShadowRenderer& renderer, const Me
     createDescriptorLayouts(ctx, renderer);
     createDescriptorPool(ctx, renderer);
     createShadowPipeline(ctx, renderer);
+    createMomentReducePipeline(ctx, renderer);
     createMainPipelines(ctx, renderer);
 
     renderer.timestampPeriodNanoseconds = ctx.physicalDeviceProperties.limits.timestampPeriod;
@@ -618,7 +782,10 @@ void createRenderer(const VulkanContext& ctx, ShadowRenderer& renderer, const Me
     writeImageDescriptor(ctx, renderer.materialSet, 3, renderer.material.roughness.view, renderer.material.sampler);
     writeImageDescriptor(ctx, renderer.materialSet, 4, renderer.material.ambientOcclusion.view,
                          renderer.material.sampler);
-    writeImageDescriptor(ctx, renderer.materialSet, 5, renderer.shadowMap.view, renderer.shadowSampler);
+    writeShadowMapDescriptor(ctx, renderer);
+    if (renderer.shadowMoments) {
+        writeMomentReduceSets(ctx, renderer);
+    }
 
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         ShadowFrameResources& frame = renderer.frames[i];
@@ -678,14 +845,18 @@ void destroyRenderer(const VulkanContext& ctx, ShadowRenderer& renderer)
     vkDestroyPipeline(ctx.device, renderer.shadowGroundPipeline, nullptr);
     vkDestroyPipeline(ctx.device, renderer.shadowPipeline, nullptr);
     vkDestroyPipelineLayout(ctx.device, renderer.shadowPipelineLayout, nullptr);
+    vkDestroyPipeline(ctx.device, renderer.momentReducePipeline, nullptr);
+    vkDestroyPipelineLayout(ctx.device, renderer.momentReducePipelineLayout, nullptr);
 
     vkDestroyDescriptorPool(ctx.device, renderer.descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(ctx.device, renderer.materialSetLayout, nullptr);
+    vkDestroyDescriptorSetLayout(ctx.device, renderer.momentReduceSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(ctx.device, renderer.sceneSetLayout, nullptr);
 
     destroySwapchainTargets(ctx, renderer);
     destroyShadowTargets(ctx, renderer);
     vkDestroySampler(ctx.device, renderer.shadowSampler, nullptr);
+    vkDestroySampler(ctx.device, renderer.shadowMomentSampler, nullptr);
 
     vkDestroyRenderPass(ctx.device, renderer.mainRenderPass, nullptr);
     vkDestroyRenderPass(ctx.device, renderer.shadowRenderPass, nullptr);
@@ -705,13 +876,15 @@ void recreateSwapchainTargets(const VulkanContext& ctx, ShadowRenderer& renderer
     createSwapchainTargets(ctx, renderer);
 }
 
-// 阴影配置改变时重建相应资源：尺寸与位数决定渲染通道的附件格式、帧缓冲与纹理，
-// 只写背面深度决定阴影管线的剔除面，最后把新的贴图视图写回材质描述符的绑定 5
+// 阴影配置改变时重建相应资源：尺寸、位数与是否需要矩决定渲染通道的附件格式、帧缓冲与纹理，
+// 只写背面深度与是否需要矩决定阴影管线，最后把新的贴图视图写回材质描述符的绑定 5
 static void applyShadowOptions(const VulkanContext& ctx, ShadowRenderer& renderer, const ShadowOptions& options)
 {
     const bool targetsChanged = renderer.shadowMapSize != options.mapSize ||
-                                renderer.shadowMapBits != options.mapBits;
-    const bool pipelineChanged = renderer.shadowBackFaceDepth != options.backFaceDepth;
+                                renderer.shadowMapBits != options.mapBits ||
+                                renderer.shadowMoments != options.moments;
+    const bool pipelineChanged = renderer.shadowBackFaceDepth != options.backFaceDepth ||
+                                 renderer.shadowMoments != options.moments;
     if (!targetsChanged && !pipelineChanged) {
         return;
     }
@@ -729,14 +902,74 @@ static void applyShadowOptions(const VulkanContext& ctx, ShadowRenderer& rendere
 
         renderer.shadowMapSize = options.mapSize;
         renderer.shadowMapBits = options.mapBits;
+        renderer.shadowMoments = options.moments;
 
         createShadowRenderPass(ctx, renderer);
         createShadowTargets(ctx, renderer);
-        writeImageDescriptor(ctx, renderer.materialSet, 5, renderer.shadowMap.view, renderer.shadowSampler);
+        writeShadowMapDescriptor(ctx, renderer);
+        writeMomentReduceSets(ctx, renderer);
     }
 
     renderer.shadowBackFaceDepth = options.backFaceDepth;
     createShadowPipeline(ctx, renderer);
+}
+
+// 矩金字塔：第 0 级由阴影通道写出，其余各级取上一级二乘二小块的平均值。
+// 每一级都要读上一级，级别之间插一条屏障；最后整条链交给主通道采样
+static void recordMomentPyramid(ShadowRenderer& renderer, VkCommandBuffer commandBuffer)
+{
+    for (uint32_t level = 1; level < renderer.shadowMipCount; ++level) {
+        VkImageMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        // 第 1 级读的是阴影通道刚写出的第 0 级，之后每一级读上一级刚写出的层级
+        barrier.srcAccessMask = level == 1 ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                                           : VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = renderer.shadowMap.image;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = level - 1;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(commandBuffer,
+                             level == 1 ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                                        : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        const uint32_t sourceSize = renderer.shadowMapSize >> (level - 1);
+        const uint32_t destSize = renderer.shadowMapSize >> level;
+        const int32_t params[5] = { static_cast<int32_t>(sourceSize), static_cast<int32_t>(sourceSize),
+                                    static_cast<int32_t>(destSize),  static_cast<int32_t>(destSize),
+                                    static_cast<int32_t>(level - 1) };
+
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                renderer.momentReducePipelineLayout, 0, 1, &renderer.momentReduceSets[level], 0,
+                                nullptr);
+        vkCmdPushConstants(commandBuffer, renderer.momentReducePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(params), params);
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, renderer.momentReducePipeline);
+        vkCmdDispatch(commandBuffer, (destSize + 7) / 8, (destSize + 7) / 8, 1);
+    }
+
+    // 第 0 级来自颜色附件，其余各级来自计算着色器，两者都要对主通道可见
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = renderer.shadowMap.image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount = renderer.shadowMipCount;
+    barrier.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(commandBuffer,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
 bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t frameCounter,
@@ -809,10 +1042,11 @@ bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t fram
         shadowScissor.extent.width = renderer.shadowMapSize;
         shadowScissor.extent.height = renderer.shadowMapSize;
 
-        // 颜色附件的初值取最远深度，落在贴图外的像素由此判定为受光；深度附件同为首帧清成最远
+        // 颜色附件的初值取最远深度，落在贴图外的像素由此判定为受光；深度附件同为首帧清成最远。
+        // 保存矩时第二个通道存深度的平方，最远深度的平方还是一
         VkClearValue shadowClearValues[2] = {};
         shadowClearValues[0].color.float32[0] = 1.0f;
-        shadowClearValues[0].color.float32[1] = 0.0f;
+        shadowClearValues[0].color.float32[1] = renderer.shadowMoments ? 1.0f : 0.0f;
         shadowClearValues[0].color.float32[2] = 0.0f;
         shadowClearValues[0].color.float32[3] = 1.0f;
         shadowClearValues[1].depthStencil.depth = 1.0f;
@@ -850,6 +1084,11 @@ bool drawFrame(const VulkanContext& ctx, ShadowRenderer& renderer, uint64_t fram
         }
 
         vkCmdEndRenderPass(frame.commandBuffer);
+
+        // 阴影通道写出的第 0 级接着交给计算着色器逐级收缩成矩金字塔，主通道按区域大小取用
+        if (input.shadow.moments) {
+            recordMomentPyramid(renderer, frame.commandBuffer);
+        }
     }
     outStatistics.cpuRecordShadowPassMilliseconds = (nowSeconds() - shadowPassStart) * 1000.0;
 

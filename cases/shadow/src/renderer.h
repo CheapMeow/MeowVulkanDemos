@@ -20,12 +20,16 @@ enum {
 // 8 位用 R8_UNORM、16 位用 R16_UNORM、32 位用 R32_SFLOAT
 VkFormat shadowMapColorFormat(uint32_t bits);
 
-// 阴影模式的取值：关闭、百分比渐近过滤、百分比渐近软阴影
+// 阴影模式的取值：关闭、百分比渐近过滤、百分比渐近软阴影、方差软阴影
 enum ShadowMode {
     SHADOW_MODE_OFF = 0,
     SHADOW_MODE_PCF = 1,
     SHADOW_MODE_PCSS = 2,
+    SHADOW_MODE_VSSM = 3,
 };
+
+// 矩金字塔的最高级数：边长 4096 的贴图逐级折半到 1 共 13 级
+enum { SHADOW_MAX_MIP_COUNT = 13 };
 
 // 基础深度偏移，单位是光源正交投影下归一化后的深度；界面上可调，调到零就能看到自阴影条纹
 constexpr float SHADOW_DEPTH_OFFSET_DEFAULT = 0.0005f;
@@ -59,13 +63,14 @@ struct ShadowSceneUniform {
     glm::vec4 shadowPcss;      // x 遮挡物搜索半径, y 光源半径的纹素尺度, z 最小半影, w 最大半影
 };
 
-// 阴影贴图与瑕疵处理的可调配置。尺寸、位数与只写背面深度发生变化时重建阴影资源，
+// 阴影贴图与瑕疵处理的可调配置。尺寸、位数、只写背面深度与是否需要矩发生变化时重建阴影资源，
 // 着色器侧的法线抬升与角度偏移只改 uniform
 struct ShadowOptions {
     uint32_t mapSize;
     uint32_t mapBits;
     bool backFaceDepth;  // 阴影通道只写入背面，用物体厚度换来深度余量
     bool groundCaster;   // 地面也写进阴影贴图，写进去之后地面会与自己比较，出现自阴影条纹
+    bool moments;        // 方差软阴影需要深度的矩，贴图因而是两通道并带一条金字塔
 };
 
 struct ShadowFrameResources {
@@ -96,15 +101,21 @@ struct ShadowRenderer {
 
     MaterialTextures material;
 
-    // 以颜色附件保存深度值的阴影贴图，主通道以采样方式读取，尺寸与位数可以更改
+    // 以颜色附件保存深度值的阴影贴图，主通道以采样方式读取，尺寸与位数可以更改。
+    // 方差软阴影下它保存深度的矩并带一条金字塔，第 0 级由阴影通道写出，其余级由计算着色器逐级收缩
     GpuTexture shadowMap;
+    VkImageView shadowMipViews[SHADOW_MAX_MIP_COUNT];
+    uint32_t shadowMipCount;
     // 阴影通道的深度测试附件，只用来挑出离光源最近的背面，不被采样
     GpuTexture shadowDepth;
     VkSampler shadowSampler;
+    // 矩按金字塔的层级取值，采样器要在线性过滤下工作，与深度模式的最近邻采样器分开
+    VkSampler shadowMomentSampler;
     VkFramebuffer shadowFramebuffer;
     uint32_t shadowMapSize;
     uint32_t shadowMapBits;
     bool shadowBackFaceDepth;
+    bool shadowMoments;
     // 主通道的深度附件，跟随交换链尺寸
     GpuTexture depthTexture;
 
@@ -124,6 +135,11 @@ struct ShadowRenderer {
     VkPipeline shadowPipeline;
     // 地面是单面几何，阴影通道里不做剔除，单独一条管线
     VkPipeline shadowGroundPipeline;
+    // 矩金字塔的收缩管线，每级一次调度，逐级读上一级写自己在同一张贴图上的下一级
+    VkDescriptorSetLayout momentReduceSetLayout;
+    VkPipelineLayout momentReducePipelineLayout;
+    VkPipeline momentReducePipeline;
+    VkDescriptorSet momentReduceSets[SHADOW_MAX_MIP_COUNT];
     VkPipelineLayout scenePipelineLayout;
     VkPipeline scenePipeline;
     VkPipeline groundPipeline;

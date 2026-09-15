@@ -40,6 +40,8 @@ static bool parseShadowMode(const std::string& value, uint32_t& mode)
         mode = SHADOW_MODE_PCF;
     } else if (value == "pcss") {
         mode = SHADOW_MODE_PCSS;
+    } else if (value == "vssm") {
+        mode = SHADOW_MODE_VSSM;
     } else {
         return false;
     }
@@ -51,7 +53,16 @@ static const char* shadowModeName(uint32_t mode)
     if (mode == SHADOW_MODE_OFF) {
         return "off";
     }
-    return mode == SHADOW_MODE_PCF ? "pcf" : "pcss";
+    if (mode == SHADOW_MODE_PCF) {
+        return "pcf";
+    }
+    return mode == SHADOW_MODE_PCSS ? "pcss" : "vssm";
+}
+
+// 只有方差软阴影需要阴影通道写出深度的矩
+static bool shadowModeNeedsMoments(uint32_t mode)
+{
+    return mode == SHADOW_MODE_VSSM;
 }
 
 static std::string shadowReportPrefix(uint32_t instances, uint32_t drawCommands)
@@ -163,7 +174,7 @@ int main(int argc, char** argv)
             interfaceEnabled = false;
         } else if (std::strcmp(argv[i], "--shadow-mode") == 0 && i + 1 < argc) {
             if (!parseShadowMode(argv[i + 1], shadowMode)) {
-                FATAL("--shadow-mode takes off, pcf or pcss");
+                FATAL("--shadow-mode takes off, pcf, pcss or vssm");
             }
             ++i;
         } else if (std::strcmp(argv[i], "--no-shadows") == 0) {
@@ -179,6 +190,8 @@ int main(int argc, char** argv)
             pcfRadius = 0.0f;
         } else if (std::strcmp(argv[i], "--pcss") == 0) {
             shadowMode = SHADOW_MODE_PCSS;
+        } else if (std::strcmp(argv[i], "--vssm") == 0) {
+            shadowMode = SHADOW_MODE_VSSM;
         } else if (std::strcmp(argv[i], "--pcf-radius") == 0 && i + 1 < argc) {
             pcfRadius = static_cast<float>(std::atof(argv[i + 1]));
             ++i;
@@ -303,7 +316,9 @@ int main(int argc, char** argv)
     shadowOptions.mapSize = shadowMapSize;
     shadowOptions.mapBits = shadowMapBits;
     shadowOptions.backFaceDepth = backFaceDepth;
-    shadowOptions.groundCaster = groundCaster;
+    // 区域矩要求贴图里每个纹素都有深度，方差软阴影下地面必须写进去
+    shadowOptions.groundCaster = groundCaster || shadowModeNeedsMoments(shadowMode);
+    shadowOptions.moments = shadowModeNeedsMoments(shadowMode);
 
     ShadowRenderer renderer = {};
     createRenderer(ctx, renderer, objectMesh, groundMesh, instances, groundInstanceIndex, shadowOptions);
@@ -407,7 +422,7 @@ int main(int argc, char** argv)
         if (verb == "shadow-mode") {
             std::string value;
             if (!(stream >> value) || !parseShadowMode(value, uiState.shadowMode)) {
-                return "err: shadow-mode takes off, pcf or pcss";
+                return "err: shadow-mode takes off, pcf, pcss or vssm";
             }
             resetTimingWindows(timingStore);
             return "ok";
@@ -645,7 +660,8 @@ int main(int argc, char** argv)
         shadowOptions.mapSize = uiState.shadowMapSize;
         shadowOptions.mapBits = uiState.shadowMapBits;
         shadowOptions.backFaceDepth = uiState.shadowBackFaceDepth;
-        shadowOptions.groundCaster = uiState.shadowGroundCaster;
+        shadowOptions.groundCaster = uiState.shadowGroundCaster || shadowModeNeedsMoments(uiState.shadowMode);
+        shadowOptions.moments = shadowModeNeedsMoments(uiState.shadowMode);
 
         ShadowSceneUniform sceneUniform;
         fillShadowUniform(camera, aspectRatio, lightDirection, sceneRadius, shadowOptions, uiState,

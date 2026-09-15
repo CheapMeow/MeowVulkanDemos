@@ -1,0 +1,30 @@
+#version 450
+
+// 矩金字塔：每一级取上一级二乘二小块的平均值。深度的均值与平方的均值都是区域上的平均量，
+// 把四块拼成一块时四块的均值再取平均就是合并后的均值，因此收缩时直接平均即可
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourceMoments;
+layout(set = 0, binding = 1, rg32f) uniform writeonly image2D destMoments;
+
+layout(push_constant) uniform Params {
+    ivec4 size;       // xy 源尺寸, zw 目标尺寸
+    int sourceLevel;  // 源纹理的层级
+} pc;
+
+void main()
+{
+    const ivec2 dest = ivec2(gl_GlobalInvocationID.xy);
+    if (dest.x >= pc.size.z || dest.y >= pc.size.w) {
+        return;
+    }
+
+    vec2 sum = vec2(0.0);
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            sum += texelFetch(sourceMoments, dest * 2 + ivec2(x, y), pc.sourceLevel).rg;
+        }
+    }
+    imageStore(destMoments, dest, vec4(sum * 0.25, 0.0, 0.0));
+}

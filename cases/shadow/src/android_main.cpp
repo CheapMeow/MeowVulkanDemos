@@ -49,6 +49,8 @@ bool parseShadowMode(const std::string& value, uint32_t& mode)
         mode = SHADOW_MODE_PCF;
     } else if (value == "pcss") {
         mode = SHADOW_MODE_PCSS;
+    } else if (value == "vssm") {
+        mode = SHADOW_MODE_VSSM;
     } else {
         return false;
     }
@@ -60,7 +62,16 @@ const char* shadowModeName(uint32_t mode)
     if (mode == SHADOW_MODE_OFF) {
         return "off";
     }
-    return mode == SHADOW_MODE_PCF ? "pcf" : "pcss";
+    if (mode == SHADOW_MODE_PCF) {
+        return "pcf";
+    }
+    return mode == SHADOW_MODE_PCSS ? "pcss" : "vssm";
+}
+
+// 只有方差软阴影需要阴影通道写出深度的矩
+bool shadowModeNeedsMoments(uint32_t mode)
+{
+    return mode == SHADOW_MODE_VSSM;
 }
 
 struct AppState {
@@ -184,7 +195,10 @@ static void initializeRendererStack(AppState& state, android_app* app)
     shadowOptions.mapSize = state.uiState.shadowMapSize;
     shadowOptions.mapBits = state.uiState.shadowMapBits;
     shadowOptions.backFaceDepth = state.uiState.shadowBackFaceDepth;
-    shadowOptions.groundCaster = state.uiState.shadowGroundCaster;
+    // 区域矩要求贴图里每个纹素都有深度，方差软阴影下地面必须写进去
+    shadowOptions.groundCaster =
+        state.uiState.shadowGroundCaster || shadowModeNeedsMoments(state.uiState.shadowMode);
+    shadowOptions.moments = shadowModeNeedsMoments(state.uiState.shadowMode);
 
     createRenderer(state.ctx, state.renderer, state.objectMesh, state.groundMesh, state.instances,
                    groundInstanceIndex, shadowOptions);
@@ -348,7 +362,9 @@ static void drawOneFrame(AppState& state)
     shadowOptions.mapSize = state.uiState.shadowMapSize;
     shadowOptions.mapBits = state.uiState.shadowMapBits;
     shadowOptions.backFaceDepth = state.uiState.shadowBackFaceDepth;
-    shadowOptions.groundCaster = state.uiState.shadowGroundCaster;
+    shadowOptions.groundCaster =
+        state.uiState.shadowGroundCaster || shadowModeNeedsMoments(state.uiState.shadowMode);
+    shadowOptions.moments = shadowModeNeedsMoments(state.uiState.shadowMode);
 
     ShadowSceneUniform sceneUniform;
     fillShadowUniform(state.camera, aspectRatio, lightDirection, sceneRadius, shadowOptions,
@@ -435,7 +451,7 @@ static void installControlHandler(AppState& state)
         if (verb == "shadow-mode") {
             std::string value;
             if (!(stream >> value) || !parseShadowMode(value, state.uiState.shadowMode)) {
-                return "err: shadow-mode takes off, pcf or pcss";
+                return "err: shadow-mode takes off, pcf, pcss or vssm";
             }
             resetTimingWindows(state.timingStore);
             return "ok";

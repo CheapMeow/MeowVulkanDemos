@@ -77,6 +77,62 @@ float samplePcss(float referenceDepth, vec2 uv)
     return filterPenumbra(referenceDepth, uv, penumbra);
 }
 
+// 区域内深度的矩：金字塔里每一级的纹素存的是 2^lod 见方小块内深度的一阶与二阶矩，
+// 取边长最接近 regionTexels 的那一级，两级之间按距离插值。
+// 区域是方的，一阶矩与二阶矩都是块内平均值，块的边长越大越模糊
+vec2 fetchRegionMoments(vec2 uv, float regionTexels)
+{
+    // 一级的纹素是 2^lod 见方小块的均值，采样时还在四个相邻纹素之间插值，
+    // 插值把核又摊宽一倍，所以取比区域边长小一级的那一级
+    const float maxLevel = -log2(scene.shadowParams.y);
+    const float lod = clamp(log2(max(regionTexels, 1.0)) - 1.0, 0.0, maxLevel);
+    return textureLod(shadowMap, uv, lod).rg;
+}
+
+// 方差软阴影：遮挡物的平均深度与受光比例都由区域内的矩估算，两次区域查询各一次采样。
+// 矩只给出一阶与二阶两个量，分布的形状由切比雪夫不等式与一条混合方程补足
+float sampleVssm(float referenceDepth, vec2 uv)
+{
+    // 第一步：用搜索范围的矩估遮挡物的平均深度。
+    // 区域的平均深度不小于接收点深度时切比雪夫不等式不成立，按没有遮挡物处理
+    const vec2 searchMoments = fetchRegionMoments(uv, scene.shadowPcss.x * 2.0);
+    const float searchMean = searchMoments.x;
+    const float searchVariance = max(searchMoments.y - searchMean * searchMean, 1e-8);
+    const float delta = referenceDepth - searchMean;
+    if (delta <= 0.0) {
+        return 1.0;
+    }
+
+    // 切比雪夫不等式给出区域内深度不小于接收点深度的比例的上界，也就是受光比例的上界
+    const float litFraction = searchVariance / (searchVariance + delta * delta);
+    const float occludedFraction = 1.0 - litFraction;
+    if (occludedFraction < 1e-3) {
+        return 1.0;
+    }
+
+    // 区域的平均深度是未遮挡与遮挡两部分按比例混合的结果，未遮挡部分的深度近似取接收点深度，
+    // 由这个混合关系反解出遮挡部分的平均深度
+    const float blockerDepth = (searchMean - litFraction * referenceDepth) / occludedFraction;
+    if (blockerDepth <= 0.0) {
+        return 1.0;
+    }
+
+    const float ratio =
+        (referenceDepth - blockerDepth) / max(blockerDepth + scene.shadowOptions.w, 1e-5);
+    const float penumbra =
+        clamp(ratio * scene.shadowPcss.y, scene.shadowPcss.z, scene.shadowPcss.w);
+
+    // 第二步：在半影范围上再取一次矩，受光比例就是切比雪夫不等式给出的上界
+    const vec2 filterMoments = fetchRegionMoments(uv, penumbra * 2.0);
+    const float filterMean = filterMoments.x;
+    const float filterVariance = max(filterMoments.y - filterMean * filterMean, 1e-8);
+    const float filterDelta = referenceDepth - filterMean;
+    if (filterDelta <= 0.0) {
+        return 1.0;
+    }
+    return filterVariance / (filterVariance + filterDelta * filterDelta);
+}
+
 // 返回 0 到 1 的受光比例：1 表示完全受光，0 表示完全处在阴影里。
 // 阴影模式为零时恒为 1
 float sampleShadow(vec3 worldPosition, vec3 normal, float nDotL)
@@ -102,6 +158,9 @@ float sampleShadow(vec3 worldPosition, vec3 normal, float nDotL)
     }
     float referenceDepth = projected.z - bias;
 
+    if (mode >= 3) {
+        return sampleVssm(referenceDepth, projected.xy);
+    }
     if (mode >= 2) {
         return samplePcss(referenceDepth, projected.xy);
     }

@@ -8,18 +8,19 @@
 
 阴影用一张贴图实现，分两步：
 
-- 阴影通道：从光源方向把实例背面的深度写进贴图。只写背面让受光表面在深度比较时稳定地处在已写入深度之前，从源头上避免自阴影条纹。贴图的分辨率与每纹素的位数都可以在界面上更改，位数决定贴图的格式，8 位用 `R8_UNORM`、16 位用 `R16_UNORM`、32 位用 `R32_SFLOAT`。
+- 阴影通道：从光源方向把实例背面的深度写进贴图。只写背面让受光表面在深度比较时稳定地处在已写入深度之前，从源头上避免自阴影条纹。贴图的分辨率与每纹素的位数都可以在界面上更改，位数决定贴图的格式，8 位用 `R8_UNORM`、16 位用 `R16_UNORM`、32 位用 `R32_SFLOAT`；方差软阴影存的是一阶与二阶矩，固定用 32 位浮点，位数那一项只作用于深度模式。
 - 主通道：正常做前向光照，同时把像素的世界位置投影到光源的正交投影空间，用投影得到的深度与贴图里存的深度做比较，得到该点的受光比例，再乘进方向光的直接光照里。
 
 深度值存在颜色附件里，比较在片元着色器里手动完成。
 
-受光比例的取值方式有三种，界面上用一个下拉框切换：
+受光比例的取值方式有四种，界面上用一个下拉框切换：
 
 | 模式 | 说明 |
 | --- | --- |
 | 关闭 | 受光比例恒为 1，只有方向光的直接光照；阴影通道整段不执行，绘制命令少一条 |
 | PCF | 在固定半径上取纹素各比较一次再取平均。半径为零时退化成一次比较，也就是硬阴影 |
 | PCSS | 先用遮挡物搜索估算遮挡物的平均深度，再按接收点到遮挡物的距离推算半影宽度，最后在半影范围上过滤 |
+| VSSM | 阴影通道写出深度的一阶与二阶矩并逐级收缩成一条金字塔，遮挡物的平均深度与受光比例都由区域内的矩估算，一次区域查询只采一次 |
 
 实例、相机与着色器里的数据结构与其他 case 共用 `common` 下的定义，本 case 只实现自己的渲染通道、管线与控制面板。
 
@@ -31,8 +32,12 @@ graph LR
     B --> C[阴影贴图]
     A --> D[主通道]
     C --> D
+    C --> F[矩金字塔]
+    F --> D
     D --> E[交换链图像]
 ```
+
+方差软阴影下阴影贴图存的是深度的一阶与二阶矩，阴影通道之后再由计算着色器把它的各个层级收缩出来，主通道按区域大小取用；其余模式的贴图只有第 0 级，没有这一步。
 
 ## 实现要点
 
@@ -171,6 +176,12 @@ $$
 
 本 case 的光源放在 2.5 倍场景半径处，$D$ 就是这段距离。UE 的方向光 PCSS 用 $\mathrm{SceneDepth} \cdot \tan\theta$ 作为搜索半径，那里的角度含着光源半角与阴影投影空间的比例，$\mathrm{SceneDepth}$ 是接收点在阴影投影空间里的深度，作用与这里的 $D$ 相同。本 case 把搜索半径做成面板参数，单位是纹素，默认 4，可在 1 到 8 之间调整。
 
+> 我就想问这个把光源视为一个圆锥算出来的搜索半径有什么用呢？先不说我用的是平行光。哪怕我用的是聚光灯，那么我如果距离一个物体为 D，但是这个物体很小，远小于 R，那这个 R 岂不是完全没有参考意义？
+>
+> 而且哪怕是真的用来决定 block 搜索范围，也应该是从 shading point 连线到光源的边界，而不是从一个点光源出发一个锥体啊？这光源锥体的说法，是 AI 的幻觉吧？
+
+![alt text](blocker_search.png)
+
 #### 半影宽度与过滤半径的换算
 
 几何关系给出的是世界单位的半影，代码里要换成纹素。光源用正交投影，深度沿光线方向线性变化，归一化深度乘上远近平面间距再加上近平面就是光源到表面的距离，距离之比于是只需要一个常数项就能算出来。换算出的半影再除以一个纹素的世界尺寸，得到以纹素为单位的过滤半径，最后被上下限钳住。逐步的公式与源码位置见下一节的「PCSS 的半影宽度」。
@@ -208,7 +219,96 @@ PCSS 的半影面积比 PCF 大，并且随光源半径增长；增长到 1200 �
 PCSS 每次受光比例计算要读五十个纹素，PCF 只要九个，但主通道的这点增量在这套装满两千个实例的
 2048 见方阴影通道面前只有 0.045 毫秒，整帧的时间几乎都被阴影通道本身占着。
 
-### 三种模式的公式与源码对应
+### 方差软阴影（VSSM）
+
+PCSS 的第一步与第三步都要把区域里的纹素逐个读出来比较，区域越大要读的纹素越多。VSSM 换一个做法：把区域内深度的分布用一阶矩与二阶矩概括，遮挡物的平均深度与受光比例都从这两个量算出来，一次区域查询只采一次，代价与区域大小无关。
+
+#### 矩的存储与金字塔
+
+VSSM 下阴影通道把每个纹素的深度与深度的平方写进两通道颜色附件（`shadow_moments.frag:9`），格式是 `R32G32_SFLOAT`（`renderer.cpp:19`）。深度的平方用来算方差：
+
+$$
+\mu = E[z], \qquad \sigma^2 = E[z^2] - \mu^2
+$$
+
+区域上的这两个量都是平均值，把四块拼成一块时四块的均值再取平均就是合并后的均值，因此金字塔收缩时直接对二乘二小块取平均（`shadow_moments_reduce.comp:26-30`）。第 0 级由阴影通道写出，其余各级由计算着色器逐级收缩（`renderer.cpp:919`），贴图因此带一条从分辨率边长一直折半到 1 的层级链（`renderer.cpp:204`）。
+
+矩需要 32 位浮点保存：深度的平方在贴图分辨率下的量化档距远大于区域内深度的方差，位数降到 16 位时方差会整片塌成零，估不出半影宽度。位数那一项因此只作用于深度模式，VSSM 的矩固定用 32 位浮点，面板上这一项在 VSSM 下置灰。
+
+#### 区域查询
+
+一片区域是边长 $2r$ 纹素的方块，取金字塔里纹素覆盖边长最接近的那一级（`shadow_sampling.glsl:83-90`）：
+
+$$
+\mathrm{lod} = \mathrm{clamp}\big(\log_2 (2r) - 1,\ 0,\ \log_2 \mathrm{mapSize}\big)
+$$
+
+取低一级是因为采样时还在四个相邻纹素之间做线性插值，插值把核又摊宽一倍，低一级正好抵消，查询覆盖的范围因此是 $\pm r$ 个纹素，与 PCSS 的格点跨度一致。
+
+区域矩要求贴图里每个纹素都有深度。贴图里若混进没有几何的纹素，它们的最远深度会把区域均值抬到接收点之前，切比雪夫不等式的前提不再成立，因此 VSSM 下地面固定写进阴影贴图（`main.cpp:663`），面板上那一项在 VSSM 下置灰。地面写进去之后，接收面自身的深度与遮挡物的深度一起进入一阶与二阶矩，接收面上不存在按纹素跳变的深度余量，因此看不到条纹。
+
+#### 遮挡物的平均深度
+
+设接收点深度为 $t$，区域里深度小于 $t$ 的纹素是遮挡物，其余是没有被遮住的部分。区域的平均深度按这两部分写开：
+
+$$
+\mu = P_{\mathrm{lit}}\, z_{\mathrm{unocc}} + (1 - P_{\mathrm{lit}})\, z_{\mathrm{occ}}
+$$
+
+$P_{\mathrm{lit}}$ 是区域里深度不小于 $t$ 的比例，切比雪夫不等式给出它的上界（`shadow_sampling.glsl:107`）：
+
+$$
+P_{\mathrm{lit}} \le \frac{\sigma^2}{\sigma^2 + (t - \mu)^2}
+$$
+
+这个单边形式要求 $t > \mu$：$t$ 不大于 $\mu$ 时区域的平均深度落在接收点之后，按没有遮挡物处理。没有遮住的那部分深度取接收点自己的深度，也就是令 $z_{\mathrm{unocc}} = t$，代入上面的混合关系反解出遮挡物的平均深度（`shadow_sampling.glsl:115`）：
+
+$$
+z_{\mathrm{occ}} = \frac{\mu - P_{\mathrm{lit}}\, t}{1 - P_{\mathrm{lit}}}
+$$
+
+区域里只有一层遮挡平面与接收面时，这个混合关系是精确的：两部分的深度各自固定，均值与方差只由两者的比例决定，切比雪夫不等式在这个分布上取到等号，反解出的 $z_{\mathrm{occ}}$ 就是遮挡平面的深度。得到遮挡物的平均深度之后，半影宽度与过滤半径的换算与 PCSS 完全相同（`shadow_sampling.glsl:120-123`）。
+
+#### 受光比例与漏光
+
+第二步在半影范围上再取一次区域矩，受光比例就是同一个不等式的右边（`shadow_sampling.glsl:126-133`）：
+
+$$
+V = \begin{cases}
+1, & t \le \mu \\
+\dfrac{\sigma^2}{\sigma^2 + (t - \mu)^2}, & t > \mu
+\end{cases}
+$$
+
+切比雪夫不等式给出的是上界，只有在区域里恰好只有两个深度、也就是只有一层遮挡平面与接收面时才取到等号。区域里的深度分布更复杂时这个上界高于真正的受光比例，阴影因此比真实结果亮，这就是漏光。另外接收面与光线夹角大时，区域里接收面自身的深度也随位置变化，这部分变化被算进方差，估计进一步偏亮；本 case 的地面近乎水平、光线的高度角默认 30 度，属于这一种情形。
+
+把区域矩换成金字塔上的取值之后，区域越大偏差越明显：区域里的遮挡物占比越小，上界与真值的差距越宽。实测（口径与上面 PCSS 的表格相同，都是与无阴影画面逐像素比，比值落在 0.15 到 0.85 之间的算半影）：
+
+| 模式 | 半影像素 | 占比 |
+| --- | --- | --- |
+| PCSS（光源半径 100） | 70900 | 4.924% |
+| VSSM（光源半径 100） | 44100 | 3.062% |
+| PCSS（光源半径 400） | 79682 | 5.533% |
+| VSSM（光源半径 400） | 27089 | 1.881% |
+| PCSS（光源半径 1200） | 81025 | 5.627% |
+| VSSM（光源半径 1200） | 26112 | 1.813% |
+
+VSSM 的半影像素占比随光源半径变大反而下降：区域变大之后切比雪夫上界与真值的差距变宽，阴影里偏亮的那部分升到 0.85 以上，被算进受光。光源半径 100 时两者接近，半径 400 以上时 VSSM 明显更淡。
+
+VSSM 的过滤核把区域里每个纹素的深度都算进去，PCSS 只在 25 个格点上比较，格点间距是半影的一半。半影宽度被上界钳到 16 个纹素时，格点间距是 8 个纹素，与阴影本身的宽度相当，PCSS 的取样因此漏掉大部分区域，边界比真实的半影更窄更暗。VSSM 给出的是整片区域的平均，过渡带更平滑、也更宽。
+
+锁定核心频率 2880 兆赫、显存频率 15001 兆赫，实例两千、贴图 2048 见方时的设备时间：
+
+| 模式 | 设备时间 | 绘制命令 |
+| --- | --- | --- |
+| 关闭 | 6.315 | 2 |
+| PCF | 12.576 | 3 |
+| PCSS | 12.594 | 3 |
+| VSSM | 12.623 | 4 |
+
+VSSM 多一条绘制命令，是因为地面要写进阴影贴图；矩金字塔的收缩用计算调度完成，不计入绘制命令条数。主通道里的采样从五十个纹素减到两次区域查询，但这一部分本来就只占零点几毫秒，整帧的时间被阴影通道本身占着，设备时间与 PCSS 持平。
+
+### 四种模式的公式与源码对应
 
 三种模式共用同一套投影与深度比较，区别只在受光比例的计算方式。
 
@@ -273,7 +373,7 @@ $$
 d_{ref} = \mathrm{depth} - \mathrm{bias}
 $$
 
-参考深度的修正由三部分组成。抬升距离是 `shadowOptions.z` 与开关 `shadowOptions.x` 的乘积，其中 `shadowOptions.z` 是一个纹素对应的世界宽度 $2 \cdot \mathrm{radius} / \mathrm{mapSize}$，$\mathrm{radius}$ 取正交视锥半边长（`main.cpp:107`）。基础项 `shadowParams.x` 是界面上的基础深度偏移，记作 $\mathrm{bias}$（`main.cpp:104`）。掠射角项由 `shadowOptions.y` 开关，表达式是
+参考深度的修正由三部分组成。抬升距离是 `shadowOptions.z` 与开关 `shadowOptions.x` 的乘积，其中 `shadowOptions.z` 是一个纹素对应的世界宽度 $2 \cdot \mathrm{radius} / \mathrm{mapSize}$，$\mathrm{radius}$ 取正交视锥半边长（`main.cpp:118`）。基础项 `shadowParams.x` 是界面上的基础深度偏移，记作 $\mathrm{bias}$（`main.cpp:115`）。掠射角项由 `shadowOptions.y` 开关，表达式是
 
 $$
 \mathrm{bias}' = \max\big(\mathrm{bias} \cdot (1 - \mathrm{nDotL}),\ \mathrm{bias}\big)
@@ -306,7 +406,7 @@ $$
 const vec2 offset = vec2(float(x), float(y)) * scene.shadowParams.y * radius;
 ```
 
-`shadowParams.y` 是一个纹素在纹理坐标下的长度，记作 $\mathrm{texel} = 1 / \mathrm{mapSize}$（`main.cpp:104`）；`shadowParams.z` 是界面上的 PCF 半径，记作 $\mathrm{radius}$。过滤核固定为九个采样点，$\mathrm{radius}$ 只改变采样间距，过滤核沿单轴覆盖 $\pm \mathrm{radius}$ 个纹素。
+`shadowParams.y` 是一个纹素在纹理坐标下的长度，记作 $\mathrm{texel} = 1 / \mathrm{mapSize}$（`main.cpp:115`）；`shadowParams.z` 是界面上的 PCF 半径，记作 $\mathrm{radius}$。过滤核固定为九个采样点，$\mathrm{radius}$ 只改变采样间距，过滤核沿单轴覆盖 $\pm \mathrm{radius}$ 个纹素。
 
 #### PCSS 的遮挡物搜索
 
@@ -323,7 +423,7 @@ $$
 
 #### PCSS 的半影宽度
 
-先把归一化深度还原成光源到表面的距离。正交投影下深度沿光线方向线性变化（`main.cpp:109-111`）：
+先把归一化深度还原成光源到表面的距离。正交投影下深度沿光线方向线性变化（`main.cpp:120-122`）：
 
 $$
 t = z \cdot (\mathrm{far} - \mathrm{near}) + \mathrm{near}
@@ -335,7 +435,7 @@ $$
 \mathrm{ratio} = \frac{t_{ref} - t_{blocker}}{t_{blocker}} = \frac{z_{ref} - z_{blocker}}{z_{blocker} + \dfrac{\mathrm{near}}{\mathrm{far} - \mathrm{near}}}
 $$
 
-分母里的 $\mathrm{near} / (\mathrm{far} - \mathrm{near})$ 就是 `shadowOptions.w`，分子是 `referenceDepth - blockerDepth`，距离之比因此只靠一个常数项就能算出来。光源半径按纹素换算后存进 `shadowPcss.y`（`main.cpp:116-117`）：
+分母里的 $\mathrm{near} / (\mathrm{far} - \mathrm{near})$ 就是 `shadowOptions.w`，分子是 `referenceDepth - blockerDepth`，距离之比因此只靠一个常数项就能算出来。光源半径按纹素换算后存进 `shadowPcss.y`（`main.cpp:127-128`）：
 
 $$
 \texttt{shadowPcss}.y = \frac{\mathrm{lightRadius} \cdot \mathrm{mapSize}}{2 \cdot \mathrm{radius}}
@@ -347,7 +447,7 @@ $$
 \mathrm{penumbra} = \mathrm{clamp}\big(\mathrm{ratio} \cdot \texttt{shadowPcss}.y,\ \texttt{shadowPcss}.z,\ \texttt{shadowPcss}.w\big)
 $$
 
-`shadowPcss.z` 与 `shadowPcss.w` 是界面上的最小半影与最大半影，单位是纹素（`main.cpp:117-118`）。把纹素单位换回世界单位：一个纹素的世界宽度是 $\dfrac{2 \cdot \mathrm{radius}}{\mathrm{mapSize}}$，于是
+`shadowPcss.z` 与 `shadowPcss.w` 是界面上的最小半影与最大半影，单位是纹素（`main.cpp:128-129`）。把纹素单位换回世界单位：一个纹素的世界宽度是 $\dfrac{2 \cdot \mathrm{radius}}{\mathrm{mapSize}}$，于是
 
 $$
 \mathrm{penumbra} \cdot \frac{2 \cdot \mathrm{radius}}{\mathrm{mapSize}} = \mathrm{ratio} \cdot \mathrm{lightRadius} = \frac{d_1}{d_2} \cdot R
@@ -368,11 +468,81 @@ $$
 
 沿单轴的最大偏移是 $\mathrm{texel} \cdot \mathrm{penumbra}$，过滤核覆盖 $\pm \mathrm{penumbra}$ 个纹素，正好等于上一步算出的半影半宽。
 
+#### VSSM 的矩与金字塔
+
+阴影通道写入的是一阶与二阶矩（`shadow_moments.frag:7-9`）：
+
+$$
+\begin{aligned}
+M_0(\mathrm{uv}) &= z \\
+M_1(\mathrm{uv}) &= z^2
+\end{aligned}
+$$
+
+金字塔收缩时对二乘二小块取平均，两个通道都是区域上的平均值（`shadow_moments_reduce.comp:24-30`）：
+
+$$
+\begin{aligned}
+M_i^{L+1}(p) &= \frac{1}{4} \sum_{x=0}^{1} \sum_{y=0}^{1} M_i^{L}(2p + (x, y)), & i &\in \{0, 1\}
+\end{aligned}
+$$
+
+区域查询按区域半径 $r$ 取层级并在两级之间插值（`shadow_sampling.glsl:83-90`）：
+
+$$
+\mathrm{lod} = \mathrm{clamp}\big(\log_2 (2r) - 1,\ 0,\ \log_2 \mathrm{mapSize}\big)
+$$
+
+从取回的矩算出区域均值与方差，$M_0$ 是一阶矩 $E[z]$，$M_1$ 是二阶矩 $E[z^2]$：
+
+$$
+\mu = M_0, \qquad \sigma^2 = \max\big(M_1 - M_0^2,\ 10^{-8}\big)
+$$
+
+#### VSSM 的遮挡物深度
+
+搜索半径 $R$ 取 `shadowPcss.x`，区域是边长 $2R$ 的方块。切比雪夫不等式给出区域里深度不小于接收点深度的比例的上界，再按混合关系反解遮挡物的平均深度（`shadow_sampling.glsl:98-115`）：
+
+$$
+\begin{aligned}
+\delta &= t - \mu \\
+P_{\mathrm{lit}} &= \frac{\sigma^2}{\sigma^2 + \delta^2} \\
+z_{\mathrm{occ}} &= \frac{\mu - P_{\mathrm{lit}}\, t}{1 - P_{\mathrm{lit}}}
+\end{aligned}
+$$
+
+$\delta \le 0$ 或被遮挡比例 $1 - P_{\mathrm{lit}}$ 小于 $10^{-3}$ 时按没有遮挡物处理，返回完全受光；反解出非正深度时同样如此。半影宽度与过滤半径（`shadow_sampling.glsl:120-123`）：
+
+$$
+\begin{aligned}
+\mathrm{ratio} &= \frac{t - z_{\mathrm{occ}}}{z_{\mathrm{occ}} + \texttt{shadowOptions}.w} \\
+\mathrm{penumbra} &= \mathrm{clamp}\big(\mathrm{ratio} \cdot \texttt{shadowPcss}.y,\ \texttt{shadowPcss}.z,\ \texttt{shadowPcss}.w\big)
+\end{aligned}
+$$
+
+与 PCSS 的式子相同，区别只在 $z_{\mathrm{occ}}$ 的来源：PCSS 从 25 次逐纹素比较里数出来，VSSM 从区域矩里反解。
+
+#### VSSM 的受光比例
+
+半影区域是边长 $2\,\mathrm{penumbra}$ 的方块，受光比例在它的区域矩上算（`shadow_sampling.glsl:126-133`）：
+
+$$
+V = \begin{cases}
+1, & t \le \mu' \\
+\dfrac{\sigma'^2}{\sigma'^2 + (t - \mu')^2}, & t > \mu'
+\end{cases}
+$$
+
+其中 $\mu'$ 与 $\sigma'^2$ 是半影区域的均值与方差。一次受光比例计算一共读两个纹素（两次区域查询），与半影宽度无关。
+
 #### 模式分派
 
-`sampleShadow` 先处理两个退化情形：模式为零时返回 1（`shadow_sampling.glsl:84-87`），投影落在贴图范围之外时返回 1（`shadow_sampling.glsl:93-96`）。其余情形按模式分派（`shadow_sampling.glsl:105-108`）：
+`sampleShadow` 先处理两个退化情形：模式为零时返回 1（`shadow_sampling.glsl:140-143`），投影落在贴图范围之外时返回 1（`shadow_sampling.glsl:149-152`）。其余情形按模式分派（`shadow_sampling.glsl:161-167`）：
 
 ```glsl
+if (mode >= 3) {
+    return sampleVssm(referenceDepth, projected.xy);
+}
 if (mode >= 2) {
     return samplePcss(referenceDepth, projected.xy);
 }
@@ -489,6 +659,8 @@ $$
 
 地面参与投影之后，基础深度偏移与位数的作用也变得直观：偏移调零时条纹最重，偏移调大后条纹被推回去；位数降到 8 位时，量化档距本身就超过了填补余量所需的偏移，默认偏移下条纹也会大量出现。
 
+VSSM 下地面固定写进阴影通道，面板上这一项置灰。区域矩要求贴图里每个纹素都有深度：缺少几何的纹素会把区域均值抬到接收点之前，切比雪夫不等式的前提不再成立，整幅画面都会变亮。矩把接收面自身的深度与遮挡物的深度一起算进分布，接收面上不存在按纹素跳变的深度余量，因此地面上看不到条纹。
+
 ### 深度值的存储与比较
 
 深度值写进一张颜色附件，采样器不做硬件比较，主通道逐纹素取出深度后在着色器里手动比较：参考深度不大于贴图里存的深度就算受光。采样器的滤波必须是最近邻，否则会把相邻纹素的深度值平均掉。
@@ -511,7 +683,7 @@ $$
 
 ### 阴影贴图的重建
 
-界面上的分辨率与深度值位数改动后，渲染器在下一帧开头重建阴影贴图的全部资源。采样器与贴图无关，保持不变；渲染通道与阴影管线跟随位数，因为附件格式变了；帧缓冲与两张纹理跟随分辨率；重建完成后把新的贴图视图重新写进材质描述符的绑定 5。重建前先等设备空闲，避免拆掉还在被上一帧使用的贴图与管线，因此改动是低频操作。
+界面上的分辨率与深度值位数改动后，渲染器在下一帧开头重建阴影贴图的全部资源。采样器与贴图无关，保持不变；渲染通道与阴影管线跟随位数，因为附件格式变了；帧缓冲与两张纹理跟随分辨率；重建完成后把新的贴图视图重新写进材质描述符的绑定 5，矩金字塔每一级的描述符指向新的层级。切换进或切出方差软阴影同样重建：附件格式在两通道的矩与单通道的深度之间变化，层级链的长度也跟着分辨率变化。重建前先等设备空闲，避免拆掉还在被上一帧使用的贴图与管线，因此改动是低频操作。
 
 ### 参考
 
@@ -520,7 +692,8 @@ $$
 - GPU Gems 第 1 版第 11 章《Shadow Map Antialiasing》：PCF 使用固定大小的采样邻域；带硬件比较的采样器在一次读取里做四次深度比较，再按纹素坐标对比较结果做双线性插值，采样点落在半个纹素处的偏移由此而来。
 - GPU Gems 第 2 版第 17 章《Efficient Soft-Edged Shadows Using Pixel Shader Branching》：可平均的量是每次比较的结果，深度值本身不能模糊；采样位置抖动与分层采样；半影区域自适应增加采样数。
 - GAMES202 第 3 讲《Real-Time Shadows 1》：把可见性从渲染方程中提出来所需的约等式与成立条件；PCSS 的遮挡物搜索、半影估计、按半影过滤三步；用相似三角形估计遮挡物搜索范围。
-- GAMES202 第 4 讲《Real-Time Shadows 2》：PCF 的定义式，即对示性函数加权求和；平均施加在每次比较的结果上。
+- GAMES202 第 4 讲《Real-Time Shadows 2》：PCF 的定义式，即对示性函数加权求和；平均施加在每次比较的结果上；用区域的一阶与二阶矩描述深度分布，再用切比雪夫不等式估算受光比例。
+- Yang、Dong、Yuan、Huang、Wang《Variance Soft Shadow Mapping》（Pacific Graphics 2010）：把遮挡物搜索与半影过滤都换成区域矩上的一次估算；遮挡物的平均深度由混合关系反解，未遮挡部分的深度取接收点自己的深度；矩用和区域表或多级渐近纹理预计算；切比雪夫不等式的前提不成立时把区域继续细分，本 case 的区域只取一片。
 
 ## 界面控件
 
@@ -530,18 +703,18 @@ $$
 | 移动速度 | 相机移动速度 |
 | 方位角 | 光源绕 Y 轴的方向 |
 | 高度角 | 光源与水平面的夹角，越大越接近正上方 |
-| 阴影模式 | 关闭、PCF、PCSS 三档；关闭时阴影通道整段不执行 |
+| 阴影模式 | 关闭、PCF、PCSS、VSSM 四档；关闭时阴影通道整段不执行 |
 | PCF 半径 | 过滤半径，以纹素为单位；零表示一次比较，得到硬阴影 |
-| 遮挡物搜索半径 | PCSS 第一步搜索遮挡物的半径，以纹素为单位 |
-| 光源半径 | PCSS 推算半影用的光源半径，单位是世界单位 |
+| 遮挡物搜索半径 | PCSS 与 VSSM 第一步搜索遮挡物的半径，以纹素为单位 |
+| 光源半径 | PCSS 与 VSSM 推算半影用的光源半径，单位是世界单位 |
 | 最小半影、最大半影 | 过滤半径的上下限，以纹素为单位 |
 | 分辨率 | 阴影贴图的边长，可选 512、1024、2048、4096，改动后重建贴图 |
-| 深度值位数 | 每纹素存深度值的位数，可选 8、16、32，改动后重建渲染通道与管线 |
+| 深度值位数 | 每纹素存深度值的位数，可选 8、16、32，改动后重建渲染通道与管线；VSSM 的矩固定用 32 位浮点，这一项在 VSSM 下置灰 |
 | 只写背面深度 | 阴影通道的剔除面，关闭后写入正面深度，可以观察自阴影条纹 |
 | 法线抬升采样点 | 采样位置沿世界法线抬起，关闭后条纹变多 |
 | 掠射角放大偏移 | 按入射角放大深度偏移，关闭后掠射角处的条纹变多 |
 | 基础深度偏移 | 比较时的常数偏移，拉到零可以单独观察上面几项的作用 |
-| 地面写入阴影贴图 | 把地面也画进阴影通道，地面因此与自己比较而出现条纹 |
+| 地面写入阴影贴图 | 把地面也画进阴影通道，地面因此与自己比较而出现条纹；VSSM 下固定勾选且不可改 |
 | GPU 锁频 | 与间接绘制 case 共用同一个面板 |
 
 面板同时显示绘制命令条数与阴影贴图说明，另附操作指南；耗时面板按本 case 的通道拆分逐项列出。
@@ -555,17 +728,18 @@ $$
 | `--instances N` | 启动时的实例数量 | 2000 |
 | `--light-yaw D` | 光源方位角，单位度 | 135 |
 | `--light-pitch D` | 光源高度角，单位度 | 30 |
-| `--shadow-mode off\|pcf\|pcss` | 启动时的阴影模式 | pcf |
+| `--shadow-mode off\|pcf\|pcss\|vssm` | 启动时的阴影模式 | pcf |
 | `--no-shadows` / `--shadows` | 等价于 `--shadow-mode off` 与 `--shadow-mode pcf` | 开启 |
 | `--pcss` | 等价于 `--shadow-mode pcss` | 关闭 |
+| `--vssm` | 等价于 `--shadow-mode vssm` | 关闭 |
 | `--no-pcf` / `--pcf` | 在 PCF 模式里把半径切到 0 与默认值，零就是硬阴影 | 半径 1 |
 | `--pcf-radius F` | PCF 的过滤半径，取值 0 到 3 | 1 |
-| `--pcss-search F` | 遮挡物搜索半径，取值 1 到 8 | 4 |
-| `--pcss-light-size F` | 光源半径，取值 25 到 2000 | 400 |
-| `--pcss-min-penumbra F` | 最小半影，取值 0 到 8 | 1 |
-| `--pcss-max-penumbra F` | 最大半影，取值 1 到 64 | 16 |
+| `--pcss-search F` | 遮挡物搜索半径，取值 1 到 8，PCSS 与 VSSM 共用 | 4 |
+| `--pcss-light-size F` | 光源半径，取值 25 到 2000，PCSS 与 VSSM 共用 | 400 |
+| `--pcss-min-penumbra F` | 最小半影，取值 0 到 8，PCSS 与 VSSM 共用 | 1 |
+| `--pcss-max-penumbra F` | 最大半影，取值 1 到 64，PCSS 与 VSSM 共用 | 16 |
 | `--shadow-size N` | 阴影贴图的边长，取值 256 到 4096 | 2048 |
-| `--shadow-bits N` | 每纹素存深度值的位数，取 8、16 或 32 | 32 |
+| `--shadow-bits N` | 每纹素存深度值的位数，取 8、16 或 32；VSSM 的矩固定 32 位浮点 | 32 |
 | `--no-back-face-depth` | 启动时改写入正面深度 | 只写背面 |
 | `--no-normal-lift` | 启动时关闭法线抬升 | 开启 |
 | `--no-slope-bias` | 启动时关闭掠射角放大偏移 | 开启 |
@@ -583,22 +757,27 @@ $$
 
 ## 测试方法
 
-三种模式的画面差异可以用抓帧对比：
+四种模式的画面差异可以用抓帧对比：
 
 ```
 build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_off.png --shadow-mode off
 build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_hard.png --shadow-mode pcf --pcf-radius 0
 build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_pcf.png --shadow-mode pcf
 build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_pcss.png --shadow-mode pcss
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_vssm.png --shadow-mode vssm
 ```
 
-关闭阴影的那张应当完全没有被遮挡关系影响的明暗；硬阴影与 PCF 两张的差别集中在阴影边界附近，PCF 的边界更宽、过渡带里有中间灰；PCSS 那张的过渡带比 PCF 更宽，并且宽出来的部分集中在遮挡物离接收点较远的地方。
+关闭阴影的那张应当完全没有被遮挡关系影响的明暗；硬阴影与 PCF 两张的差别集中在阴影边界附近，PCF 的边界更宽、过渡带里有中间灰；PCSS 那张的过渡带比 PCF 更宽，并且宽出来的部分集中在遮挡物离接收点较远的地方；VSSM 那张的过渡带同样是软的，但整体比 PCSS 淡，光源半径调到 1200 时更明显。
 
-PCSS 的半影宽度随光源半径变化，PCF 的边界宽度与光源无关：
+做像素统计时以关闭阴影的那张为完全受光的基准，逐像素比亮度，比值落在 0.15 到 0.85 之间的算半影。光源半径 100 时 PCSS 与 VSSM 的半影面积接近，半径 400 与 1200 时 VSSM 明显更小，原因是切比雪夫上界随区域变大偏离真值。
+
+PCSS 与 VSSM 的半影宽度都随光源半径变化，PCF 的边界宽度与光源无关：
 
 ```
 build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_pcss_small.png --shadow-mode pcss --pcss-light-size 100
 build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_pcss_large.png --shadow-mode pcss --pcss-light-size 1200
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_vssm_small.png --shadow-mode vssm --pcss-light-size 100
+build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture intermediate\shadow_vssm_large.png --shadow-mode vssm --pcss-light-size 1200
 ```
 
 把 `--pcss-max-penumbra` 压到 1，PCSS 与半径 1 的 PCF 会非常接近，因为两者的过滤半径被钳到同一个值。
@@ -638,7 +817,7 @@ build\meow_shadow.exe --instances 2000 --auto-exit 4 --no-interface --capture in
 adb -s <serial> forward tcp:21000 tcp:21000
 ```
 
-桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`instances`/`yaw`/`pitch` 改配置，`shadow-mode off|pcf|pcss` 切换阴影模式，`pcf-radius` 改 PCF 的过滤半径，`pcss-search`/`pcss-light-size`/`pcss-min-penumbra`/`pcss-max-penumbra` 改 PCSS 的四项参数，`shadows 1`/`shadows 0` 与 `pcf 1`/`pcf 0` 是模式切换的简写，`shadow-size` 与 `shadow-bits` 改贴图配置并触发重建，`back-face-depth`/`normal-lift`/`slope-bias` 取 0 或 1 逐项开关瑕疵处理，`depth-offset` 改基础深度偏移，`ground-caster 0|1` 开关地面参与投影，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
+桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`instances`/`yaw`/`pitch` 改配置，`shadow-mode off|pcf|pcss|vssm` 切换阴影模式，`pcf-radius` 改 PCF 的过滤半径，`pcss-search`/`pcss-light-size`/`pcss-min-penumbra`/`pcss-max-penumbra` 改 PCSS 与 VSSM 共用的四项参数，`shadows 1`/`shadows 0` 与 `pcf 1`/`pcf 0` 是模式切换的简写，`shadow-size` 与 `shadow-bits` 改贴图配置并触发重建，`back-face-depth`/`normal-lift`/`slope-bias` 取 0 或 1 逐项开关瑕疵处理，`depth-offset` 改基础深度偏移，`ground-caster 0|1` 开关地面参与投影，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
 
 随时间变化的参数曲线与测量报告格式与间接绘制 case 一致，报告里的前两列是实例数量与绘制命令条数。
 
@@ -650,15 +829,17 @@ adb -s <serial> forward tcp:21000 tcp:21000
 | --- | --- |
 | `src/main.cpp` | 桌面入口：命令行解析、主循环与界面状态 |
 | `src/android_main.cpp` | 安卓入口：NativeActivity 生命周期、ANativeWindow 表面与交换链、主循环 |
-| `src/renderer.cpp` | 阴影与主通道两个渲染通道、四条管线、阴影贴图的创建与重建、时间戳查询 |
+| `src/renderer.cpp` | 阴影与主通道两个渲染通道、四条管线、阴影贴图的创建与重建、矩金字塔的收缩、时间戳查询 |
 | `src/scene_setup.cpp` | 地面网格、实例网格摆放、光源正交投影需要的网格范围 |
 | `src/case_ui.cpp` | 本 case 的控制面板与全部界面文本 |
 | `src/timing_items.cpp` | 本 case 的计时项定义 |
 | `shaders/shadow.vert` | 阴影通道的顶点变换 |
 | `shaders/shadow.frag` | 阴影通道，把窗口深度写进颜色附件 |
+| `shaders/shadow_moments.frag` | 阴影通道，方差软阴影下把深度的一阶与二阶矩写进颜色附件 |
+| `shaders/shadow_moments_reduce.comp` | 矩金字塔的每一级，取上一级二乘二小块的平均值 |
 | `shaders/scene.vert` `shaders/scene.frag` | 主通道的物体 |
 | `shaders/ground.frag` | 主通道的地面，棋盘格图案 |
-| `shaders/shadow_sampling.glsl` | 手动深度比较、百分比渐近过滤、遮挡物搜索与半影估计 |
+| `shaders/shadow_sampling.glsl` | 手动深度比较、百分比渐近过滤、遮挡物搜索与半影估计、区域矩与切比雪夫不等式 |
 | `shaders/lighting_common.glsl` | 方向光的直接光照 |
 
 ## 安卓端差异
