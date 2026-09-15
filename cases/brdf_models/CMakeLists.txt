@@ -1,0 +1,19 @@
+# brdf_models case：微表面 BRDF 与能量守恒
+meow_add_case(brdf_models
+    SOURCES
+        src/renderer.cpp
+        src/scene_setup.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/fullscreen.vert
+        shaders/background.frag
+        shaders/sphere.vert
+        shaders/sphere.frag
+    SHADER_INCLUDES
+        shaders/brdf_common.glsl
+)
