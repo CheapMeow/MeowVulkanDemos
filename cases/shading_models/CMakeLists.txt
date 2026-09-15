@@ -1,0 +1,20 @@
+# shading_models case：着色频率与镜面模型
+meow_add_case(shading_models
+    SOURCES
+        src/renderer.cpp
+        src/scene_setup.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/shade.vert
+        shaders/flat.frag
+        shaders/phong.frag
+        shaders/gouraud.vert
+        shaders/gouraud.frag
+    SHADER_INCLUDES
+        shaders/shading_common.glsl
+)
