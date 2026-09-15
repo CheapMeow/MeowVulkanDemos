@@ -1,0 +1,20 @@
+# tone_mapping case：色调映射算子
+meow_add_case(tone_mapping
+    SOURCES
+        src/renderer.cpp
+        src/scene_setup.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/fullscreen.vert
+        shaders/sky.frag
+        shaders/object.vert
+        shaders/object.frag
+        shaders/bar.vert
+        shaders/bar.frag
+        shaders/tonemap.frag
+)

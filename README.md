@@ -29,6 +29,7 @@
 | [`cases/hzb_culling`](cases/hzb_culling/README.md) | HZB 遮挡剔除，对比最远与最近深度两种极值取向 |
 | [`cases/ssr_hiz`](cases/ssr_hiz/README.md) | 屏幕空间反射，对比等距步进、按像素步进与层次遍历 |
 | [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
+| [`cases/tone_mapping`](cases/tone_mapping/README.md) | 色调映射算子，对比四条曲线、逐通道与按亮度、三种输出编码 |
 
 ## 目录结构
 
