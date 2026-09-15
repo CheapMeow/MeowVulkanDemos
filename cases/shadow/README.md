@@ -277,6 +277,73 @@ if (mode >= 2) {
 return filterShadow(referenceDepth, projected.xy, scene.shadowParams.z);
 ```
 
+### UE 5.8 的 PCF 与 PCSS
+
+UE 的阴影过滤在 `Engine/Shaders/Private/ShadowFilteringCommon.ush` 与 `Engine/Shaders/Private/ShadowPercentageCloserFiltering.ush`，两者都由 `Engine/Shaders/Private/ShadowProjectionPixelShader.usf` 的 `Main` 调用，走哪条路在编译期由 `USE_PCSS` 宏决定（`ShadowProjectionPixelShader.usf:225-264`）。
+
+#### UE 的 PCF
+
+入口是 `ManualPCF`（`ShadowFilteringCommon.ush:353-365`），按 `SHADOW_QUALITY` 分四档：
+
+| 档位 | 函数 | 采样方式 |
+| --- | --- | --- |
+| 1 | `ManualNoFiltering` | 一次采样，单纹素判定 |
+| 2 | `Manual1x1PCF` | 一次 `Gather` 取回 2 乘 2 个纹素，双线性重采样 |
+| 3 | `Manual3x3PCF` | 四次 `Gather` 覆盖 4 乘 4 个纹素，重采样成 3 乘 3 |
+| 4 | `Manual5x5PCF` | 九次 `Gather` 覆盖 6 乘 6 个纹素，重采样成 5 乘 5 |
+
+`Gather` 一次返回 2 乘 2 个纹素的深度，3 乘 3 档用四次调用覆盖 4 乘 4，5 乘 5 档用九次调用覆盖 6 乘 6。重采样由 `PCF3x3gather`（`ShadowFilteringCommon.ush:97-119`）与 `HorizontalPCF5x2`（`ShadowFilteringCommon.ush:122-141`）里的双线性权重完成，5 乘 5 档的归一化系数是 `1 / 25`（`ShadowFilteringCommon.ush:294`）。
+
+深度比较是一段软过渡，`CalculateShadowVisibilityTransmittanceFactor`（`ShadowFilteringCommon.ush:151-180`）：
+
+```text
+ShadowFactor = saturate((ShadowmapDepth - SceneDepth) * TransitionScale + 1)
+```
+
+深度差为正时结果饱和到 1，深度差小于 `-1 / TransitionScale` 时饱和到 0，中间是一条线性斜坡。`TransitionScale` 取自 `SoftTransitionScale.z`，延迟管线里还要乘 `lerp(ProjectionDepthBiasParameters.z, 1.0, NoL)` 当作接收者偏移（`ShadowProjectionPixelShader.usf:249-251`）；接近 1 的深度可以按未写入处理，由 `bTreatMaxDepthUnshadowed` 开关决定。过滤之后有两步修正：`ApplyPCFOverBlurCorrection` 把受光比例取平方（`ShadowProjectionPixelShader.usf:90-93`），`ShadowSharpen` 做对比度拉伸 `saturate((Shadow - 0.5) * ShadowSharpen + 0.5)`（`ShadowProjectionPixelShader.usf:397`）。
+
+本 case 的 PCF 用 3 乘 3 的整数格点逐纹素取值，每次比较只有 0 与 1 两个结果，半径由滑块给出；UE 的比较是一条随深度差变化的斜坡，采样由 `Gather` 加双线性重采样完成，另外还有平方与锐化两步修正。
+
+#### UE 的 PCSS
+
+入口是 `DirectionalPCSS`（`ShadowPercentageCloserFiltering.ush:122`），只用于方向光与聚光灯，由 `TDirectionalPercentageCloserShadowProjectionPS` 与 `TSpotPercentageCloserShadowProjectionPS` 两个着色器类编译出带 `USE_PCSS` 与 `SPOT_LIGHT_PCSS` 宏的变体（`Engine/Source/Runtime/Renderer/Private/ShadowRendering.h:1657-1759`）。
+
+采样数在头文件里固定：遮挡物搜索 16 个（`PCSS_SEARCH_BITS = 4`），过滤 32 个（`PCSS_SAMPLE_BITS = 5`）（`ShadowPercentageCloserFiltering.ush:42-47`）。两组采样位置都来自 Sobol 序列，再用 `UniformSampleDiskConcentricApprox` 映射到单位圆盘（`ShadowPercentageCloserFiltering.ush:197-198`）。
+
+遮挡物搜索的半径（`ShadowPercentageCloserFiltering.ush:149-154`）：方向光取 `SceneDepth * TanLightSourceAngle`，聚光灯取投影后的光源半径 `ProjectedSourceRadius`，随后受 `MaxKernelSize`（`r.Shadow.MaxSoftKernelSize`）钳制。
+
+```glsl
+SearchRadius = clamp(PCSSMinFilterSize, Settings.MaxKernelSize, SearchRadius);
+```
+
+这一行按 `clamp(x, minVal, maxVal) = min(max(x, minVal), maxVal)` 展开，在 `MaxKernelSize` 不小于 `MinFilterSize` 时等于 `min(MaxKernelSize, SearchRadius)`，也就是搜索半径被 `MaxKernelSize` 钳在上界。
+
+搜索循环统计落在接收点之前的纹素，累加它们的深度、深度平方与个数，另外累加采样偏移的一阶矩与二阶矩（`ShadowPercentageCloserFiltering.ush:195-222`）。两种提前返回：一个遮挡物都没有时返回 1，所有采样都命中遮挡物时返回 0（`ShadowPercentageCloserFiltering.ush:241-250`）。
+
+半影宽度（`ShadowPercentageCloserFiltering.ush:267-276`）：
+
+```text
+AverageOccluderDistance = SceneDepth - DepthAvg
+方向光：Penumbra = TanLightSourceAngle * AverageOccluderDistance
+聚光灯：Penumbra = ProjectedSourceRadius * AverageOccluderDistance / DepthAvg
+Penumbra = min(Penumbra, MaxKernelSize)
+```
+
+`SceneDepth` 是接收点在光源空间的深度，`DepthAvg` 是遮挡物的平均深度，两者之差是接收点到遮挡物的距离，`DepthAvg` 本身是光源到遮挡物的距离。聚光灯的式子与本 case 的 `ratio` 是同一个比值；方向光用光源半角的切线代替有限距离的光源半径，`Penumbra = tanθ * d1`，而本 case 的 `lightRadius / d2` 就是 `tanθ`，两个式子在这里重合。`TanLightSourceAngle` 在主机侧预先乘上阴影投影空间的纵横向比例 `SZ / SW`，`MaxKernelSize` 除以贴图边长，一起写进 `PCSSParameters`（`ShadowRendering.h:1693-1703`）。
+
+过滤半径（`ShadowPercentageCloserFiltering.ush:278-280`）：
+
+```text
+RawFilterRadius = RandomFilterScale * Penumbra        RandomFilterScale = 0.75
+FilterRadius = max(PCFMinFilterSize, RawFilterRadius)
+```
+
+过滤循环取 32 个圆盘采样，采样偏移是 `PCFUVMatrix * 圆盘坐标 * FilterRadius`，比较同样用软过渡 `saturate((SampleDepth - SceneDepth + SampleDepthBias) * TransitionScale + 1)`，最后取平均（`ShadowPercentageCloserFiltering.ush:418-433`）。
+
+UE 在过滤上另做了三件事。按遮挡物偏移的协方差矩阵求特征向量与特征值，把圆盘核拉成椭圆（`PCSS_ANTI_ALIASING_METHOD == 2`，`ShadowPercentageCloserFiltering.ush:291-386`）；对结果做一次锐化 `saturate(FinalSharpenessFactor * (Visibility - 0.5) + 0.5)`（`ShadowPercentageCloserFiltering.ush:437-459`）；相邻四个像素共享遮挡物搜索与过滤结果，共享程度 `DoPerQuad = 0.8 * max(1 - maxDerivative / (MinFilterSize * MaxTexelShare), 0)` 随采样偏移的屏幕导数减小而提高（`ShadowPercentageCloserFiltering.ush:224-239` 与 `461-463`）。
+
+本 case 的搜索与过滤都用 5 乘 5 的方格，采样数为 25 与 25；UE 用 16 与 32 个圆盘采样，并按遮挡物分布把核拉成椭圆。本 case 没有锐化与像素四边形共享这两步。
+
 ### 地面是否参与投影
 
 阴影通道默认只画物体实例，地面那一份实例变换放在实例缓冲末尾，绘制范围取不到它，因此地面只在主通道里当接收者。面板上的「地面写入阴影贴图」把地面也画进阴影通道，它在阴影通道里不剔除，用单独一条管线。
