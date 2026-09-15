@@ -31,6 +31,7 @@
 | [`cases/reverse_z`](cases/reverse_z/README.md) | 共面地面的深度精度，对比标准深度与 Reverse-Z 下的 Z-fighting |
 | [`cases/tone_mapping`](cases/tone_mapping/README.md) | 色调映射算子，对比四条曲线、逐通道与按亮度、三种输出编码 |
 | [`cases/shading_models`](cases/shading_models/README.md) | 着色频率与镜面模型，对比平面着色、Gouraud、Phong 与两种高光模型 |
+| [`cases/spherical_harmonics`](cases/spherical_harmonics/README.md) | 球谐环境光照，对比 1 到 5 阶重建与辐照度，附逐像素半球积分参考 |
 
 ## 目录结构
 
