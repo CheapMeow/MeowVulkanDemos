@@ -36,6 +36,39 @@ graph LR
 
 ## 实现要点
 
+### 阴影贴图的可见性
+
+阴影贴图把「这个点能不能看到光源」化成一个深度比较。着色点投影到光源空间，得到贴图坐标 $\mathrm{uv}$ 与沿光线方向的深度 $d$，贴图在 $\mathrm{uv}$ 处存着沿同一条光线最近的遮挡物深度 $D$：
+
+$$
+V = \begin{cases}
+1, & d \le D(\mathrm{uv}) \\
+0, & d > D(\mathrm{uv})
+\end{cases}
+$$
+
+直接光照的积分里，可见性就是这个 0 与 1 的因子：
+
+$$
+L_o(p, \omega_o) = \int_{\Omega} L_i(p, \omega_i)\, f_r(p, \omega_i, \omega_o)\, \cos\theta\, V(p, \omega_i)\, \mathrm{d}\omega_i
+$$
+
+把可见性从积分里提出来要用到下面的约等式：
+
+$$
+\int_{\Omega} f(x)\, g(x)\, \mathrm{d}x \approx \frac{\int_{\Omega} f(x)\, \mathrm{d}x}{\int_{\Omega} \mathrm{d}x} \cdot \int_{\Omega} g(x)\, \mathrm{d}x
+$$
+
+它成立的条件有两个：积分范围很小，或者 $g$ 足够光滑（最大值与最小值差别不大）。方向光的入射方向挤在极窄的范围里，积分范围极小，第一个条件满足，于是
+
+$$
+L_o(p, \omega_o) \approx \frac{\int_{\Omega} V(p, \omega_i)\, \mathrm{d}\omega_i}{\int_{\Omega} \mathrm{d}\omega_i} \cdot \int_{\Omega} L_i(p, \omega_i)\, f_r(p, \omega_i, \omega_o)\, \cos\theta\, \mathrm{d}\omega_i
+$$
+
+右侧第一个因子就是阴影项：可见的入射方向占全部入射方向的比例，取值落在 0 到 1 之间；第二个因子是与可见性无关的直接光照。这一步把阴影化简成一个标量，乘进直接光照即可，代价是光源要小或者材质要平滑。
+
+单次比较只有 0 与 1 两个结果，阴影边界因此是硬的。贴图分辨率有限，一个纹素覆盖若干着色点，投影放大时边界还会出现台阶状的锯齿。要让边界出现过渡带，就需要在多次比较的结果上取平均。
+
 ### 光源使用正交投影
 
 场景里只有一盏方向光，方向光的全部光线互相平行。光线平行带来一个结果：着色点沿光线方向投影到光源平面上时，投影位置与它到光源的距离无关，一整束平行光线在投影平面上收缩成同一点。正交投影描述的正是这种平行光线，投影矩阵里没有透视除法，世界位置在光源空间的深度沿光线方向线性变化。
@@ -81,12 +114,66 @@ graph LR
 
 > 实际测试发现“掠射角放大偏移”似乎没有效果？例如，测试平面的自阴影时，调整“基础深度偏移”为恰好到再增大一点就可以消除自阴影的程度，然后再开启“掠射角放大偏移”，发现自阴影没有改善。
 
-### 百分比渐近软阴影
+### 百分比渐近过滤（PCF）
 
-PCF 的过滤半径是常数，阴影边界的宽度不随遮挡物的远近变化；真实的面光源在接收点被近处遮挡物挡住时
-半影窄，被远处遮挡物挡住时半影宽。PCSS 用两步把这个关系补上：先在接收点周围一个搜索半径内统计落在
+把一次比较换成一片邻域内多次比较的平均，就得到 0 到 1 之间的受光比例。设着色点为 $x$，$p$ 是它在贴图上的位置，$N(p)$ 是 $p$ 的邻域，$D_{sm}(q)$ 是贴图在邻域纹素 $q$ 处存的深度，$D_{scene}(x)$ 是着色点自己的深度，$\chi^{+}$ 是示性函数（参数不小于零取 1，否则取 0），则
+
+$$
+V(x) = \sum_{q \in N(p)} w(p, q)\, \chi^{+}\!\left[ D_{sm}(q) - D_{scene}(x) \right]
+$$
+
+$w(p, q)$ 是权重，取平均值时 $w = 1 / |N(p)|$。平均的对象是每次比较得到的 0 与 1，贴图里的深度值保持原样：深度是沿光线方向的几何量，对深度本身取平均没有对应的几何含义。
+
+邻域固定为几个纹素时，投影放大仍然能被平滑。贴图被放大意味着相邻纹素的深度很接近，采样块每滑动一格只换掉一行或一列纹素，受光比例的变化因此很小，过渡呈现为一条平滑的带。
+
+本 case 的采样偏移取纹素宽度的整数倍，九个采样点落在固定的九个纹素中心上，同一纹素之内的受光比例保持不变，跨过纹素边界时整级变化，过渡带的取值只能是 0 与 1 之间九分之一的整数倍。要让它在纹素内部连续渐变，需要让一次读取同时取回 2 乘 2 个纹素并对比较结果做双线性插值，GPU Gems 第 1 版第 11 章用的是带硬件比较的采样器，硬件先做四次深度比较再按纹素坐标插值。本 case 的深度存在颜色附件里，比较在着色器里手动完成，线性插值会把相邻纹素的深度平均掉，采样器的滤波因此必须取最近邻，这个台阶也就保留下来。
+
+本 case 的邻域取 3 乘 3 的格点，格点间距是 $\mathrm{radius}$ 个纹素，九次比较取平均。$\mathrm{radius}$ 由面板给出，取零时退化成一次比较，得到硬阴影。
+
+### 百分比渐近软阴影（PCSS）
+
+PCF 的过滤半径是常数，阴影边界的宽度不随遮挡物的远近变化；面光源在接收点被近处遮挡物挡住时
+半影窄，被远处遮挡物挡住时半影宽。PCSS 用三步把这个关系补上：先在接收点周围一个搜索半径内统计落在
 接收点之前的纹素，得到遮挡物的平均深度；接收点到遮挡物的距离与遮挡物到光源的距离之比决定半影宽度，
 遮挡物离得越远半影越宽；最后在这个半影宽度上做过滤。搜索半径内一个遮挡物都没有时这一点按完全受光处理。
+
+#### 半影的几何来源
+
+设光源是一块半径为 $R$ 的圆盘，位于遮挡物后方 $d_2$ 处，接收面位于遮挡物前方 $d_1$ 处。从接收点看过去，遮挡物边缘把光源的圆盘投影在接收面上，放大倍数就是 $d_1 / d_2$，投影的半径是
+
+$$
+w = R \cdot \frac{d_1}{d_2}
+$$
+
+这个投影就是半影的宽度。接收面上落在投影之内的点，光源被遮挡物挡掉一部分，受光比例落在 0 与 1 之间；落在投影之外的点能看到整个光源，受光比例为 1。
+
+把式子写成比值形式 $w / R = d_1 / d_2$，就能读出远近关系：遮挡物贴近接收面时 $d_1$ 趋近 0，半宽趋近 0，边界变硬；遮挡物贴近光源时 $d_2$ 变小，$d_1 / d_2$ 变大，半宽变大，边界变柔。
+
+把 $R / d_2$ 记作光源在遮挡物处张开的半角的切线 $\tan\theta$，半影宽度就是
+
+$$
+w = \tan\theta \cdot d_1
+$$
+
+方向光的光源在无穷远处，$\theta$ 不随遮挡物的位置变化，$w$ 只与遮挡物到接收点的距离成正比。UE 的方向光 PCSS 用的正是这种固定角度的写法。
+
+#### 遮挡物搜索的范围
+
+搜索的目的是找出可能挡在接收点与光源之间的纹素。从接收点朝光源看，能射到这一点的全部光线落在以光源为底的一个锥体里，只有落在这个锥体内的遮挡物才可能挡掉光源的一部分；锥体之外的遮挡物不影响这一点。
+
+设这个锥体的半角是 $\varphi$，光源圆盘到接收点的距离是 $D$，则 $\tan\varphi = R / D$。在距接收点 $t$ 处，锥体的横向半径是 $t \tan\varphi$；遮挡物位于接收点与光源之间，$t$ 最大取 $D$，因此横向偏移的上界是
+
+$$
+t \tan\varphi \le D \tan\varphi = R
+$$
+
+也就是光源自身的半径。搜索半径取到 $R$，就能覆盖所有可能起作用的遮挡物。
+
+本 case 的光源放在 2.5 倍场景半径处，$D$ 就是这段距离。UE 的方向光 PCSS 用 $\mathrm{SceneDepth} \cdot \tan\theta$ 作为搜索半径，那里的角度含着光源半角与阴影投影空间的比例，$\mathrm{SceneDepth}$ 是接收点在阴影投影空间里的深度，作用与这里的 $D$ 相同。本 case 把搜索半径做成面板参数，单位是纹素，默认 4，可在 1 到 8 之间调整。
+
+#### 半影宽度与过滤半径的换算
+
+几何关系给出的是世界单位的半影，代码里要换成纹素。光源用正交投影，深度沿光线方向线性变化，归一化深度乘上远近平面间距再加上近平面就是光源到表面的距离，距离之比于是只需要一个常数项就能算出来。换算出的半影再除以一个纹素的世界尺寸，得到以纹素为单位的过滤半径，最后被上下限钳住。逐步的公式与源码位置见下一节的「PCSS 的半影宽度」。
 
 PCF
 
@@ -95,11 +182,6 @@ PCF
 PCSS
 
 ![alt text](./images/PCSS_showcase.png)
-
-半影宽度按光源正交投影下的深度换算。那个投影里深度沿光线方向线性变化，归一化深度乘上远近平面间距再
-加上近平面就是光源到表面的距离，所以距离之比只需要一个常数项就能算出来。换算出的是世界单位的半影，
-再除以一个纹素的世界尺寸就得到以纹素为单位的过滤半径，这个半径被上下限钳住，上界限制一次过滤最多
-覆盖多少纹素。
 
 光源半径的单位是世界单位。场景的光源放在 2.5 倍场景半径处，实例数量两千时场景半径约 264，光源在 660
 个世界单位之外；半径小的光源角直径微乎其微，半影会小到一个纹素以下，看起来与 PCF 没有区别，所以默认
@@ -142,12 +224,14 @@ vec2 uv = projected.xy * 0.5 + 0.5;
 
 写成公式：
 
-```text
-uv    = clip.xy / clip.w * 0.5 + 0.5
-depth = clip.z  / clip.w
-```
+$$
+\begin{aligned}
+\mathrm{uv} &= \frac{\mathrm{clip}.xy}{\mathrm{clip}.w} \cdot 0.5 + 0.5 \\
+\mathrm{depth} &= \frac{\mathrm{clip}.z}{\mathrm{clip}.w}
+\end{aligned}
+$$
 
-裁剪坐标的 x、y 从 -1 到 1 映射到纹理坐标的 0 到 1。光源用正交投影，clip.w 恒为 1，`depth` 就是世界位置在光源空间的线性深度。
+裁剪坐标的 x、y 从 -1 到 1 映射到纹理坐标的 0 到 1。光源用正交投影，$\mathrm{clip}.w$ 恒为 1，$\mathrm{depth}$ 就是世界位置在光源空间的线性深度。
 
 阴影通道把窗口深度写进颜色附件的第 0 个通道（`shadow.frag:9`）：
 
@@ -155,7 +239,7 @@ depth = clip.z  / clip.w
 outDepth = gl_FragCoord.z;
 ```
 
-光栅化得到的 `gl_FragCoord.z` 与主通道的 `depth` 来自同一个矩阵，两者可以直接比较。
+光栅化得到的 `gl_FragCoord.z` 与主通道的 $\mathrm{depth}$ 来自同一个矩阵，两者可以直接比较。
 
 #### 深度比较
 
@@ -165,10 +249,12 @@ outDepth = gl_FragCoord.z;
 return referenceDepth <= texture(shadowMap, uv).r ? 1.0 : 0.0;
 ```
 
-```text
-lit(d_ref, uv) = 1,  d_ref <= d_map(uv)
-               = 0,  d_ref >  d_map(uv)
-```
+$$
+\mathrm{lit}(d_{ref}, \mathrm{uv}) = \begin{cases}
+1, & d_{ref} \le d_{map}(\mathrm{uv}) \\
+0, & d_{ref} > d_{map}(\mathrm{uv})
+\end{cases}
+$$
 
 #### 参考深度的偏移
 
@@ -183,11 +269,17 @@ if (scene.shadowOptions.y > 0.5) {
 float referenceDepth = projected.z - bias;
 ```
 
-```text
-d_ref = depth - bias
-```
+$$
+d_{ref} = \mathrm{depth} - \mathrm{bias}
+$$
 
-参考深度的修正由三部分组成。抬升距离是 `shadowOptions.z * shadowOptions.x`，其中 `shadowOptions.x` 是开关，`shadowOptions.z` 是一个纹素对应的世界宽度 `2 * radius / mapSize`，`radius` 取正交视锥半边长（`main.cpp:107`）。基础项 `shadowParams.x` 是界面上的基础深度偏移（`main.cpp:104`）。掠射角项由 `shadowOptions.y` 开关，表达式是 `max(bias * (1.0 - nDotL), bias)`，`nDotL` 落在 0 到 1 之间，`bias * (1.0 - nDotL)` 随之落在 0 到 `bias` 之间，`max` 取回 `bias`，所以偏移量在各种入射角下都等于基础偏移。
+参考深度的修正由三部分组成。抬升距离是 `shadowOptions.z` 与开关 `shadowOptions.x` 的乘积，其中 `shadowOptions.z` 是一个纹素对应的世界宽度 $2 \cdot \mathrm{radius} / \mathrm{mapSize}$，$\mathrm{radius}$ 取正交视锥半边长（`main.cpp:107`）。基础项 `shadowParams.x` 是界面上的基础深度偏移，记作 $\mathrm{bias}$（`main.cpp:104`）。掠射角项由 `shadowOptions.y` 开关，表达式是
+
+$$
+\mathrm{bias}' = \max\big(\mathrm{bias} \cdot (1 - \mathrm{nDotL}),\ \mathrm{bias}\big)
+$$
+
+$\mathrm{nDotL}$ 落在 0 到 1 之间，$\mathrm{bias} \cdot (1 - \mathrm{nDotL})$ 随之落在 0 到 $\mathrm{bias}$ 之间，$\max$ 取回 $\mathrm{bias}$，所以偏移量在各种入射角下都等于基础偏移。
 
 #### 硬阴影
 
@@ -203,68 +295,78 @@ if (radius <= 0.0) {
 
 三乘三的格点，间距是 PCF 半径个纹素（`shadow_sampling.glsl:20-27`）：
 
-```text
-offset(x, y) = (x, y) * texel * radius           x, y ∈ {-1, 0, 1}
-visibility   = (1/9) * Σ lit(d_ref, uv + offset(x, y))
-```
+$$
+\begin{aligned}
+\mathrm{offset}(x, y) &= (x, y) \cdot \mathrm{texel} \cdot \mathrm{radius}, & x, y &\in \{-1, 0, 1\} \\
+\mathrm{visibility} &= \frac{1}{9} \sum_{x=-1}^{1} \sum_{y=-1}^{1} \mathrm{lit}\big(d_{ref},\ \mathrm{uv} + \mathrm{offset}(x, y)\big)
+\end{aligned}
+$$
 
 ```glsl
 const vec2 offset = vec2(float(x), float(y)) * scene.shadowParams.y * radius;
 ```
 
-`texel = shadowParams.y = 1 / mapSize`（`main.cpp:104`），`radius = shadowParams.z` 是界面上的 PCF 半径。过滤核固定为九个采样点，`radius` 只改变采样间距，过滤核沿单轴覆盖 ±radius 个纹素。
+`shadowParams.y` 是一个纹素在纹理坐标下的长度，记作 $\mathrm{texel} = 1 / \mathrm{mapSize}$（`main.cpp:104`）；`shadowParams.z` 是界面上的 PCF 半径，记作 $\mathrm{radius}$。过滤核固定为九个采样点，$\mathrm{radius}$ 只改变采样间距，过滤核沿单轴覆盖 $\pm \mathrm{radius}$ 个纹素。
 
 #### PCSS 的遮挡物搜索
 
 五乘五的格点，间距是半个搜索半径（`shadow_sampling.glsl:45-60`）：
 
-```text
-offset(x, y) = (x, y) * texel * R * 0.5          x, y ∈ {-2, -1, 0, 1, 2}
-blockerDepth = mean{ d_map(uv + offset(x, y)) : d_ref > d_map(uv + offset(x, y)) }
-             = -1                                没有纹素满足条件时
-```
+$$
+\begin{aligned}
+\mathrm{offset}(x, y) &= (x, y) \cdot \mathrm{texel} \cdot R \cdot 0.5, & x, y &\in \{-2, -1, 0, 1, 2\} \\
+\mathrm{blockerDepth} &= \frac{1}{|S|} \sum_{q \in S} d_{map}(q), & S &= \{\, q : d_{ref} > d_{map}(q) \,\}
+\end{aligned}
+$$
 
-`R = shadowPcss.x` 是搜索半径（纹素），沿单轴的最大偏移是 `texel * R`，搜索范围覆盖 ±R 个纹素。
+`shadowPcss.x` 是搜索半径，记作 $R$（纹素）；$S$ 为空时取 $-1$，表示这一点完全受光。沿单轴的最大偏移是 $\mathrm{texel} \cdot R$，搜索范围覆盖 $\pm R$ 个纹素。
 
 #### PCSS 的半影宽度
 
 先把归一化深度还原成光源到表面的距离。正交投影下深度沿光线方向线性变化（`main.cpp:109-111`）：
 
-```text
-t = z * (far - near) + near
-```
+$$
+t = z \cdot (\mathrm{far} - \mathrm{near}) + \mathrm{near}
+$$
 
-其中 `near = 0.1`，`far = radius * 6`。接收点到遮挡物的距离与遮挡物到光源的距离分别是 `t_ref - t_blocker` 与 `t_blocker`，两者的比值（`shadow_sampling.glsl:73-74`）：
+其中 $\mathrm{near} = 0.1$，$\mathrm{far} = 6 \cdot \mathrm{radius}$。接收点到遮挡物的距离与遮挡物到光源的距离分别是 $t_{ref} - t_{blocker}$ 与 $t_{blocker}$，两者的比值（`shadow_sampling.glsl:73-74`）：
 
-```text
-ratio = (t_ref - t_blocker) / t_blocker
-      = (z_ref - z_blocker) / (z_blocker + near / (far - near))
-```
+$$
+\mathrm{ratio} = \frac{t_{ref} - t_{blocker}}{t_{blocker}} = \frac{z_{ref} - z_{blocker}}{z_{blocker} + \dfrac{\mathrm{near}}{\mathrm{far} - \mathrm{near}}}
+$$
 
-分母里的 `near / (far - near)` 就是 `shadowOptions.w`，分子是 `referenceDepth - blockerDepth`，距离之比因此只靠一个常数项就能算出来。光源半径按纹素换算后存进 `shadowPcss.y`（`main.cpp:116-117`）：
+分母里的 $\mathrm{near} / (\mathrm{far} - \mathrm{near})$ 就是 `shadowOptions.w`，分子是 `referenceDepth - blockerDepth`，距离之比因此只靠一个常数项就能算出来。光源半径按纹素换算后存进 `shadowPcss.y`（`main.cpp:116-117`）：
 
-```text
-shadowPcss.y = lightRadius * mapSize / (2 * radius)
-```
+$$
+\texttt{shadowPcss}.y = \frac{\mathrm{lightRadius} \cdot \mathrm{mapSize}}{2 \cdot \mathrm{radius}}
+$$
 
-`2 * radius` 是正交视锥的世界宽度，`mapSize` 是贴图边长，两者之比把世界单位换成纹素。半影宽度是比值与 `shadowPcss.y` 的乘积，再夹在 `shadowPcss.z` 与 `shadowPcss.w` 之间（`shadow_sampling.glsl:75-76`）：
+$2 \cdot \mathrm{radius}$ 是正交视锥的世界宽度，$\mathrm{mapSize}$ 是贴图边长，两者之比把世界单位换成纹素。半影宽度是比值与 `shadowPcss.y` 的乘积，再夹在 `shadowPcss.z` 与 `shadowPcss.w` 之间（`shadow_sampling.glsl:75-76`）：
 
-```text
-penumbra = clamp(ratio * shadowPcss.y, shadowPcss.z, shadowPcss.w)
-```
+$$
+\mathrm{penumbra} = \mathrm{clamp}\big(\mathrm{ratio} \cdot \texttt{shadowPcss}.y,\ \texttt{shadowPcss}.z,\ \texttt{shadowPcss}.w\big)
+$$
 
-`shadowPcss.z` 与 `shadowPcss.w` 是界面上的最小半影与最大半影，单位是纹素（`main.cpp:117-118`）。把纹素单位换回世界单位：一个纹素的世界宽度是 `2 * radius / mapSize`，`penumbra * (2 * radius / mapSize) = ratio * lightRadius`，也就是 (d1 / d2) * 光源半径。完整半影宽度是这个值的两倍，等于光源直径乘以 d1 / d2，与相似三角形得到的结论一致。
+`shadowPcss.z` 与 `shadowPcss.w` 是界面上的最小半影与最大半影，单位是纹素（`main.cpp:117-118`）。把纹素单位换回世界单位：一个纹素的世界宽度是 $\dfrac{2 \cdot \mathrm{radius}}{\mathrm{mapSize}}$，于是
+
+$$
+\mathrm{penumbra} \cdot \frac{2 \cdot \mathrm{radius}}{\mathrm{mapSize}} = \mathrm{ratio} \cdot \mathrm{lightRadius} = \frac{d_1}{d_2} \cdot R
+$$
+
+也就是接收点到遮挡物的距离与遮挡物到光源的距离之比乘上光源半径。完整半影宽度是这个值的两倍，等于光源直径乘以 $d_1 / d_2$，与相似三角形得到的结论一致。
 
 #### PCSS 的半影过滤
 
 五乘五的格点，间距是半个半影宽度（`shadow_sampling.glsl:31-41`）：
 
-```text
-offset(x, y) = (x, y) * texel * penumbra * 0.5   x, y ∈ {-2, -1, 0, 1, 2}
-visibility   = (1/25) * Σ lit(d_ref, uv + offset(x, y))
-```
+$$
+\begin{aligned}
+\mathrm{offset}(x, y) &= (x, y) \cdot \mathrm{texel} \cdot \mathrm{penumbra} \cdot 0.5, & x, y &\in \{-2, -1, 0, 1, 2\} \\
+\mathrm{visibility} &= \frac{1}{25} \sum_{x=-2}^{2} \sum_{y=-2}^{2} \mathrm{lit}\big(d_{ref},\ \mathrm{uv} + \mathrm{offset}(x, y)\big)
+\end{aligned}
+$$
 
-沿单轴的最大偏移是 `texel * penumbra`，过滤核覆盖 ±penumbra 个纹素，正好等于上一步算出的半影半宽。
+沿单轴的最大偏移是 $\mathrm{texel} \cdot \mathrm{penumbra}$，过滤核覆盖 $\pm \mathrm{penumbra}$ 个纹素，正好等于上一步算出的半影半宽。
 
 #### 模式分派
 
@@ -292,15 +394,19 @@ UE 的阴影过滤在 `Engine/Shaders/Private/ShadowFilteringCommon.ush` 与 `En
 | 3 | `Manual3x3PCF` | 四次 `Gather` 覆盖 4 乘 4 个纹素，重采样成 3 乘 3 |
 | 4 | `Manual5x5PCF` | 九次 `Gather` 覆盖 6 乘 6 个纹素，重采样成 5 乘 5 |
 
-`Gather` 一次返回 2 乘 2 个纹素的深度，3 乘 3 档用四次调用覆盖 4 乘 4，5 乘 5 档用九次调用覆盖 6 乘 6。重采样由 `PCF3x3gather`（`ShadowFilteringCommon.ush:97-119`）与 `HorizontalPCF5x2`（`ShadowFilteringCommon.ush:122-141`）里的双线性权重完成，5 乘 5 档的归一化系数是 `1 / 25`（`ShadowFilteringCommon.ush:294`）。
+`Gather` 一次返回 2 乘 2 个纹素的深度，3 乘 3 档用四次调用覆盖 4 乘 4，5 乘 5 档用九次调用覆盖 6 乘 6。重采样由 `PCF3x3gather`（`ShadowFilteringCommon.ush:97-119`）与 `HorizontalPCF5x2`（`ShadowFilteringCommon.ush:122-141`）里的双线性权重完成，5 乘 5 档的归一化系数是 $1 / 25$（`ShadowFilteringCommon.ush:294`）。
 
 深度比较是一段软过渡，`CalculateShadowVisibilityTransmittanceFactor`（`ShadowFilteringCommon.ush:151-180`）：
 
-```text
-ShadowFactor = saturate((ShadowmapDepth - SceneDepth) * TransitionScale + 1)
-```
+$$
+\mathrm{ShadowFactor} = \mathrm{saturate}\big((\mathrm{ShadowmapDepth} - \mathrm{SceneDepth}) \cdot \mathrm{TransitionScale} + 1\big)
+$$
 
-深度差为正时结果饱和到 1，深度差小于 `-1 / TransitionScale` 时饱和到 0，中间是一条线性斜坡。`TransitionScale` 取自 `SoftTransitionScale.z`，延迟管线里还要乘 `lerp(ProjectionDepthBiasParameters.z, 1.0, NoL)` 当作接收者偏移（`ShadowProjectionPixelShader.usf:249-251`）；接近 1 的深度可以按未写入处理，由 `bTreatMaxDepthUnshadowed` 开关决定。过滤之后有两步修正：`ApplyPCFOverBlurCorrection` 把受光比例取平方（`ShadowProjectionPixelShader.usf:90-93`），`ShadowSharpen` 做对比度拉伸 `saturate((Shadow - 0.5) * ShadowSharpen + 0.5)`（`ShadowProjectionPixelShader.usf:397`）。
+深度差为正时结果饱和到 1，深度差小于 $-\dfrac{1}{\mathrm{TransitionScale}}$ 时饱和到 0，中间是一条线性斜坡。$\mathrm{TransitionScale}$ 取自 `SoftTransitionScale.z`，延迟管线里还要乘 $\mathrm{lerp}(\texttt{ProjectionDepthBiasParameters}.z,\ 1.0,\ \mathrm{NoL})$ 当作接收者偏移（`ShadowProjectionPixelShader.usf:249-251`）；接近 1 的深度可以按未写入处理，由 `bTreatMaxDepthUnshadowed` 开关决定。过滤之后有两步修正：`ApplyPCFOverBlurCorrection` 把受光比例取平方（`ShadowProjectionPixelShader.usf:90-93`），`ShadowSharpen` 做对比度拉伸（`ShadowProjectionPixelShader.usf:397`）：
+
+$$
+\mathrm{Shadow} = \mathrm{saturate}\big((\mathrm{Shadow} - 0.5) \cdot \mathrm{ShadowSharpen} + 0.5\big)
+$$
 
 本 case 的 PCF 用 3 乘 3 的整数格点逐纹素取值，每次比较只有 0 与 1 两个结果，半径由滑块给出；UE 的比较是一条随深度差变化的斜坡，采样由 `Gather` 加双线性重采样完成，另外还有平方与锐化两步修正。
 
@@ -310,37 +416,68 @@ ShadowFactor = saturate((ShadowmapDepth - SceneDepth) * TransitionScale + 1)
 
 采样数在头文件里固定：遮挡物搜索 16 个（`PCSS_SEARCH_BITS = 4`），过滤 32 个（`PCSS_SAMPLE_BITS = 5`）（`ShadowPercentageCloserFiltering.ush:42-47`）。两组采样位置都来自 Sobol 序列，再用 `UniformSampleDiskConcentricApprox` 映射到单位圆盘（`ShadowPercentageCloserFiltering.ush:197-198`）。
 
-遮挡物搜索的半径（`ShadowPercentageCloserFiltering.ush:149-154`）：方向光取 `SceneDepth * TanLightSourceAngle`，聚光灯取投影后的光源半径 `ProjectedSourceRadius`，随后受 `MaxKernelSize`（`r.Shadow.MaxSoftKernelSize`）钳制。
+遮挡物搜索的半径（`ShadowPercentageCloserFiltering.ush:149-154`）：方向光取 $\mathrm{SceneDepth} \cdot \mathrm{TanLightSourceAngle}$，聚光灯取投影后的光源半径 $\mathrm{ProjectedSourceRadius}$，随后受 $\mathrm{MaxKernelSize}$（`r.Shadow.MaxSoftKernelSize`）钳制。
 
 ```glsl
 SearchRadius = clamp(PCSSMinFilterSize, Settings.MaxKernelSize, SearchRadius);
 ```
 
-这一行按 `clamp(x, minVal, maxVal) = min(max(x, minVal), maxVal)` 展开，在 `MaxKernelSize` 不小于 `MinFilterSize` 时等于 `min(MaxKernelSize, SearchRadius)`，也就是搜索半径被 `MaxKernelSize` 钳在上界。
+这一行按 $\mathrm{clamp}(x, \mathrm{minVal}, \mathrm{maxVal}) = \min(\max(x, \mathrm{minVal}), \mathrm{maxVal})$ 展开，在 $\mathrm{MaxKernelSize}$ 不小于 $\mathrm{MinFilterSize}$ 时等于 $\min(\mathrm{MaxKernelSize}, \mathrm{SearchRadius})$，也就是搜索半径被 `MaxKernelSize` 钳在上界。
 
 搜索循环统计落在接收点之前的纹素，累加它们的深度、深度平方与个数，另外累加采样偏移的一阶矩与二阶矩（`ShadowPercentageCloserFiltering.ush:195-222`）。两种提前返回：一个遮挡物都没有时返回 1，所有采样都命中遮挡物时返回 0（`ShadowPercentageCloserFiltering.ush:241-250`）。
 
-半影宽度（`ShadowPercentageCloserFiltering.ush:267-276`）：
+半影宽度（`ShadowPercentageCloserFiltering.ush:267-276`）。接收点到遮挡物的距离是
 
-```text
-AverageOccluderDistance = SceneDepth - DepthAvg
-方向光：Penumbra = TanLightSourceAngle * AverageOccluderDistance
-聚光灯：Penumbra = ProjectedSourceRadius * AverageOccluderDistance / DepthAvg
-Penumbra = min(Penumbra, MaxKernelSize)
-```
+$$
+\mathrm{AverageOccluderDistance} = \mathrm{SceneDepth} - \mathrm{DepthAvg}
+$$
 
-`SceneDepth` 是接收点在光源空间的深度，`DepthAvg` 是遮挡物的平均深度，两者之差是接收点到遮挡物的距离，`DepthAvg` 本身是光源到遮挡物的距离。聚光灯的式子与本 case 的 `ratio` 是同一个比值；方向光用光源半角的切线代替有限距离的光源半径，`Penumbra = tanθ * d1`，而本 case 的 `lightRadius / d2` 就是 `tanθ`，两个式子在这里重合。`TanLightSourceAngle` 在主机侧预先乘上阴影投影空间的纵横向比例 `SZ / SW`，`MaxKernelSize` 除以贴图边长，一起写进 `PCSSParameters`（`ShadowRendering.h:1693-1703`）。
+方向光与聚光灯的半影分别是
+
+$$
+\mathrm{Penumbra}_{\mathrm{dir}} = \mathrm{TanLightSourceAngle} \cdot \mathrm{AverageOccluderDistance}
+$$
+
+$$
+\mathrm{Penumbra}_{\mathrm{spot}} = \frac{\mathrm{ProjectedSourceRadius} \cdot \mathrm{AverageOccluderDistance}}{\mathrm{DepthAvg}}
+$$
+
+两者都再取上界
+
+$$
+\mathrm{Penumbra} = \min(\mathrm{Penumbra},\ \mathrm{MaxKernelSize})
+$$
+
+`SceneDepth` 是接收点在光源空间的深度，`DepthAvg` 是遮挡物的平均深度，两者之差是接收点到遮挡物的距离，`DepthAvg` 本身是光源到遮挡物的距离。聚光灯的式子与本 case 的 $\mathrm{ratio}$ 是同一个比值；方向光用光源半角的切线代替有限距离的光源半径，写成 $w = \tan\theta \cdot d_1$，而本 case 的 $\mathrm{lightRadius} / d_2$ 就是 $\tan\theta$，两个式子在这里重合。`TanLightSourceAngle` 在主机侧预先乘上阴影投影空间的纵横向比例 $\mathrm{SZ} / \mathrm{SW}$，`MaxKernelSize` 除以贴图边长，一起写进 `PCSSParameters`（`ShadowRendering.h:1693-1703`）。
 
 过滤半径（`ShadowPercentageCloserFiltering.ush:278-280`）：
 
-```text
-RawFilterRadius = RandomFilterScale * Penumbra        RandomFilterScale = 0.75
-FilterRadius = max(PCFMinFilterSize, RawFilterRadius)
-```
+$$
+\begin{aligned}
+\mathrm{RawFilterRadius} &= \mathrm{RandomFilterScale} \cdot \mathrm{Penumbra}, & \mathrm{RandomFilterScale} &= 0.75 \\
+\mathrm{FilterRadius} &= \max(\mathrm{PCFMinFilterSize},\ \mathrm{RawFilterRadius})
+\end{aligned}
+$$
 
-过滤循环取 32 个圆盘采样，采样偏移是 `PCFUVMatrix * 圆盘坐标 * FilterRadius`，比较同样用软过渡 `saturate((SampleDepth - SceneDepth + SampleDepthBias) * TransitionScale + 1)`，最后取平均（`ShadowPercentageCloserFiltering.ush:418-433`）。
+过滤循环取 32 个圆盘采样，采样偏移是
 
-UE 在过滤上另做了三件事。按遮挡物偏移的协方差矩阵求特征向量与特征值，把圆盘核拉成椭圆（`PCSS_ANTI_ALIASING_METHOD == 2`，`ShadowPercentageCloserFiltering.ush:291-386`）；对结果做一次锐化 `saturate(FinalSharpenessFactor * (Visibility - 0.5) + 0.5)`（`ShadowPercentageCloserFiltering.ush:437-459`）；相邻四个像素共享遮挡物搜索与过滤结果，共享程度 `DoPerQuad = 0.8 * max(1 - maxDerivative / (MinFilterSize * MaxTexelShare), 0)` 随采样偏移的屏幕导数减小而提高（`ShadowPercentageCloserFiltering.ush:224-239` 与 `461-463`）。
+$$
+\mathrm{SampleUVOffset} = \mathrm{PCFUVMatrix} \cdot e \cdot \mathrm{FilterRadius}
+$$
+
+$e$ 是单位圆盘上的采样点；比较同样用软过渡 $\mathrm{saturate}\big((\mathrm{SampleDepth} - \mathrm{SceneDepth} + \mathrm{SampleDepthBias}) \cdot \mathrm{TransitionScale} + 1\big)$，最后取平均（`ShadowPercentageCloserFiltering.ush:418-433`）。
+
+UE 在过滤上另做了三件事。按遮挡物偏移的协方差矩阵求特征向量与特征值，把圆盘核拉成椭圆（`PCSS_ANTI_ALIASING_METHOD == 2`，`ShadowPercentageCloserFiltering.ush:291-386`）；对结果做一次锐化（`ShadowPercentageCloserFiltering.ush:437-459`）：
+
+$$
+\mathrm{Visibility} = \mathrm{saturate}\big(\mathrm{FinalSharpenessFactor} \cdot (\mathrm{Visibility} - 0.5) + 0.5\big)
+$$
+
+相邻四个像素共享遮挡物搜索与过滤结果，共享程度随采样偏移的屏幕导数减小而提高（`ShadowPercentageCloserFiltering.ush:224-239` 与 `461-463`）：
+
+$$
+\mathrm{DoPerQuad} = 0.8 \cdot \max\left(1 - \frac{\mathrm{maxDerivative}}{\mathrm{MinFilterSize} \cdot \mathrm{MaxTexelShare}},\ 0\right)
+$$
 
 本 case 的搜索与过滤都用 5 乘 5 的方格，采样数为 25 与 25；UE 用 16 与 32 个圆盘采样，并按遮挡物分布把核拉成椭圆。本 case 没有锐化与像素四边形共享这两步。
 
@@ -375,6 +512,15 @@ UE 在过滤上另做了三件事。按遮挡物偏移的协方差矩阵求特�
 ### 阴影贴图的重建
 
 界面上的分辨率与深度值位数改动后，渲染器在下一帧开头重建阴影贴图的全部资源。采样器与贴图无关，保持不变；渲染通道与阴影管线跟随位数，因为附件格式变了；帧缓冲与两张纹理跟随分辨率；重建完成后把新的贴图视图重新写进材质描述符的绑定 5。重建前先等设备空闲，避免拆掉还在被上一帧使用的贴图与管线，因此改动是低频操作。
+
+### 参考
+
+上面几节的推导与做法来自下列资料：
+
+- GPU Gems 第 1 版第 11 章《Shadow Map Antialiasing》：PCF 使用固定大小的采样邻域；带硬件比较的采样器在一次读取里做四次深度比较，再按纹素坐标对比较结果做双线性插值，采样点落在半个纹素处的偏移由此而来。
+- GPU Gems 第 2 版第 17 章《Efficient Soft-Edged Shadows Using Pixel Shader Branching》：可平均的量是每次比较的结果，深度值本身不能模糊；采样位置抖动与分层采样；半影区域自适应增加采样数。
+- GAMES202 第 3 讲《Real-Time Shadows 1》：把可见性从渲染方程中提出来所需的约等式与成立条件；PCSS 的遮挡物搜索、半影估计、按半影过滤三步；用相似三角形估计遮挡物搜索范围。
+- GAMES202 第 4 讲《Real-Time Shadows 2》：PCF 的定义式，即对示性函数加权求和；平均施加在每次比较的结果上。
 
 ## 界面控件
 
