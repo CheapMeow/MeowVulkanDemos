@@ -36,6 +36,7 @@
 | [`cases/color_lut`](cases/color_lut/README.md) | 调色，对比三维查找表、每通道一维曲线与解析变换的精度 |
 | [`cases/depth_of_field`](cases/depth_of_field/README.md) | 景深与散景，对比普通高斯与弥散圆感知的圆盘收集 |
 | [`cases/texture_filtering`](cases/texture_filtering/README.md) | 高阶纹理过滤，对比五种重建核与理想重建的误差与代价 |
+| [`cases/noise`](cases/noise/README.md) | 程序化噪声，对比值噪声、梯度噪声、细胞噪声与多倍频叠加 |
 
 ## 目录结构
 
