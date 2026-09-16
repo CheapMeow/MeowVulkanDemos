@@ -35,6 +35,7 @@
 | [`cases/brdf_models`](cases/brdf_models/README.md) | 微表面 BRDF 与白炉子测试，对比三种法线分布、几何项与多次散射补偿 |
 | [`cases/color_lut`](cases/color_lut/README.md) | 调色，对比三维查找表、每通道一维曲线与解析变换的精度 |
 | [`cases/depth_of_field`](cases/depth_of_field/README.md) | 景深与散景，对比普通高斯与弥散圆感知的圆盘收集 |
+| [`cases/texture_filtering`](cases/texture_filtering/README.md) | 高阶纹理过滤，对比五种重建核与理想重建的误差与代价 |
 
 ## 目录结构
 
