@@ -1,0 +1,20 @@
+# color_lut case：颜色查找表与调色
+meow_add_case(color_lut
+    SOURCES
+        src/renderer.cpp
+        src/scene_setup.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/fullscreen.vert
+        shaders/background.frag
+        shaders/scene.vert
+        shaders/scene.frag
+        shaders/patch.vert
+        shaders/patch.frag
+        shaders/grade.frag
+)
