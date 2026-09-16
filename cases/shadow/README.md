@@ -180,7 +180,7 @@ $$
 >
 > 而且哪怕是真的用来决定 block 搜索范围，也应该是从 shading point 连线到光源的边界，而不是从一个点光源出发一个锥体啊？这光源锥体的说法，是 AI 的幻觉吧？
 
-![alt text](blocker_search.png)
+![alt text](./images/blocker_search.png)
 
 #### 半影宽度与过滤半径的换算
 
@@ -225,13 +225,13 @@ PCSS 的第一步与第三步都要把区域里的纹素逐个读出来比较，
 
 #### 矩的存储与金字塔
 
-VSSM 下阴影通道把每个纹素的深度与深度的平方写进两通道颜色附件（`shadow_moments.frag:9`），格式是 `R32G32_SFLOAT`（`renderer.cpp:19`）。深度的平方用来算方差：
+VSSM 下阴影通道把每个纹素的深度与深度的平方写进两通道颜色附件（[`shadow_moments.frag:9`](shaders/shadow_moments.frag#L9)），格式是 `R32G32_SFLOAT`（`renderer.cpp:19`）。深度的平方用来算方差：
 
 $$
 \mu = E[z], \qquad \sigma^2 = E[z^2] - \mu^2
 $$
 
-区域上的这两个量都是平均值，把四块拼成一块时四块的均值再取平均就是合并后的均值，因此金字塔收缩时直接对二乘二小块取平均（`shadow_moments_reduce.comp:26-30`）。第 0 级由阴影通道写出，其余各级由计算着色器逐级收缩（`renderer.cpp:919`），贴图因此带一条从分辨率边长一直折半到 1 的层级链（`renderer.cpp:204`）。
+区域上的这两个量都是平均值，把四块拼成一块时四块的均值再取平均就是合并后的均值，因此金字塔收缩时直接对二乘二小块取平均（[`shadow_moments_reduce.comp:26-30`](shaders\shadow_moments_reduce.comp#L26-30)）。第 0 级由阴影通道写出，其余各级由计算着色器逐级收缩（`renderer.cpp:919`），贴图因此带一条从分辨率边长一直折半到 1 的层级链（`renderer.cpp:204`）。
 
 矩需要 32 位浮点保存：深度的平方在贴图分辨率下的量化档距远大于区域内深度的方差，位数降到 16 位时方差会整片塌成零，估不出半影宽度。位数那一项因此只作用于深度模式，VSSM 的矩固定用 32 位浮点，面板上这一项在 VSSM 下置灰。
 
