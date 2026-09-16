@@ -1,0 +1,22 @@
+#version 450
+
+#include "pattern_uniform.glsl"
+#include "pattern_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 1, rgba8ui) uniform uimage2D patternImage;
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(uniformData.resolutionAndPhase.xy);
+    if (any(greaterThanEqual(pixel, size))) {
+        return;
+    }
+
+    vec2 pixelCenter = vec2(pixel) + 0.5;
+    imageStore(patternImage, pixel,
+               patternTexel(pixelCenter, vec2(size), uniformData.resolutionAndPhase.z,
+                            uniformData.resolutionAndPhase.w));
+}

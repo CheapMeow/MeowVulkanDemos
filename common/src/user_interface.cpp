@@ -120,7 +120,7 @@ static GlyphUsage verifyGlyphsPresent(ImFont* font)
 }
 
 void createUserInterface(const VulkanContext& ctx, VkRenderPass renderPass, const char* const* caseTexts,
-                         int caseTextCount, UserInterface& ui)
+                         int caseTextCount, UserInterface& ui, uint32_t subpass)
 {
     // 界面只需要采样字体图集，一个组合图像采样器就够
     VkDescriptorPoolSize poolSize = {};
@@ -209,7 +209,7 @@ void createUserInterface(const VulkanContext& ctx, VkRenderPass renderPass, cons
     initInfo.MinImageCount = 2;
     initInfo.ImageCount = ctx.swapchainImageCount;
     initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    initInfo.Subpass = 0;
+    initInfo.Subpass = subpass;
     initInfo.CheckVkResultFn = checkImGuiResult;
     if (!ImGui_ImplVulkan_Init(&initInfo)) {
         FATAL("failed to initialize the imgui Vulkan backend");

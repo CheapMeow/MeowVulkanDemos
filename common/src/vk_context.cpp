@@ -91,6 +91,7 @@ static void createInstance(VulkanContext& ctx, bool enableValidation)
     }
 
     VK_CHECK(vkCreateInstance(&createInfo, nullptr, &ctx.instance));
+    ctx.apiVersion = appInfo.apiVersion;
 
     ctx.debugMessenger = VK_NULL_HANDLE;
     if (enableValidation) {
@@ -169,7 +170,29 @@ static void pickPhysicalDevice(VulkanContext& ctx)
     vkGetPhysicalDeviceProperties(ctx.physicalDevice, &ctx.physicalDeviceProperties);
     vkGetPhysicalDeviceMemoryProperties(ctx.physicalDevice, &ctx.memoryProperties);
 
-    std::printf("physical device: %s\n", ctx.physicalDeviceProperties.deviceName);
+    // 实例声明的版本与物理设备支持的版本取较小值，才是这个逻辑设备实际能用的版本
+    if (ctx.physicalDeviceProperties.apiVersion < ctx.apiVersion) {
+        ctx.apiVersion = ctx.physicalDeviceProperties.apiVersion;
+    }
+
+    std::printf("physical device: %s, Vulkan %u.%u\n", ctx.physicalDeviceProperties.deviceName,
+                VK_VERSION_MAJOR(ctx.apiVersion), VK_VERSION_MINOR(ctx.apiVersion));
+}
+
+// 设备扩展不一定存在，只有枚举得到的才往里加
+static bool isDeviceExtensionAvailable(const VulkanContext& ctx, const char* extensionName)
+{
+    uint32_t propertyCount = 0;
+    VK_CHECK(vkEnumerateDeviceExtensionProperties(ctx.physicalDevice, nullptr, &propertyCount, nullptr));
+    std::vector<VkExtensionProperties> properties(propertyCount);
+    VK_CHECK(vkEnumerateDeviceExtensionProperties(ctx.physicalDevice, nullptr, &propertyCount, properties.data()));
+
+    for (uint32_t i = 0; i < propertyCount; ++i) {
+        if (std::strcmp(properties[i].extensionName, extensionName) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void createLogicalDevice(VulkanContext& ctx)
@@ -182,8 +205,6 @@ static void createLogicalDevice(VulkanContext& ctx)
     queueInfo.queueCount = 1;
     queueInfo.pQueuePriorities = &queuePriority;
 
-    const char* deviceExtensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-
     VkPhysicalDeviceFeatures features = {};
     features.samplerAnisotropy = VK_TRUE;
     features.multiDrawIndirect = VK_TRUE;
@@ -194,13 +215,53 @@ static void createLogicalDevice(VulkanContext& ctx)
     // 顺序无关透明的加权混合要对两张附件用不同的混合状态
     features.independentBlend = VK_TRUE;
 
+    // 时间线信号量在 1.2 进入核心，1.1 上要打开 VK_KHR_timeline_semaphore 扩展。同步 case
+    // 用它演示带计数值的信号量，其余 case 不碰它，打开它不影响别的 case
+    const bool timelineIsCore = ctx.apiVersion >= VK_API_VERSION_1_2;
+    const bool timelineExtensionAvailable =
+        !timelineIsCore && isDeviceExtensionAvailable(ctx, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+
+    std::vector<const char*> enabledDeviceExtensions;
+    enabledDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    if (timelineExtensionAvailable) {
+        enabledDeviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+    }
+
+    VkPhysicalDeviceTimelineSemaphoreFeatures timelineFeatures = {};
+    timelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+
+    ctx.timelineSemaphoreSupported = false;
+    if (timelineIsCore || timelineExtensionAvailable) {
+        // 安卓的 API 24 到 32 运行库桩里没有导出这个 1.1 的核心入口点，只能按扩展的规定
+        // 从 vkGetInstanceProcAddr 取。核心名与扩展名指的是同一个函数
+        PFN_vkGetPhysicalDeviceFeatures2 getPhysicalDeviceFeatures2 =
+            reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+                vkGetInstanceProcAddr(ctx.instance, "vkGetPhysicalDeviceFeatures2"));
+        if (getPhysicalDeviceFeatures2 == nullptr) {
+            getPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+                vkGetInstanceProcAddr(ctx.instance, "vkGetPhysicalDeviceFeatures2KHR"));
+        }
+        if (getPhysicalDeviceFeatures2 == nullptr) {
+            FATAL("neither vkGetPhysicalDeviceFeatures2 nor vkGetPhysicalDeviceFeatures2KHR is available");
+        }
+
+        VkPhysicalDeviceFeatures2 featureQuery = {};
+        featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        featureQuery.pNext = &timelineFeatures;
+        getPhysicalDeviceFeatures2(ctx.physicalDevice, &featureQuery);
+        ctx.timelineSemaphoreSupported = timelineFeatures.timelineSemaphore == VK_TRUE;
+    }
+
     VkDeviceCreateInfo deviceInfo = {};
     deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     deviceInfo.queueCreateInfoCount = 1;
     deviceInfo.pQueueCreateInfos = &queueInfo;
-    deviceInfo.enabledExtensionCount = 1;
-    deviceInfo.ppEnabledExtensionNames = deviceExtensions;
+    deviceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledDeviceExtensions.size());
+    deviceInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
     deviceInfo.pEnabledFeatures = &features;
+    if (ctx.timelineSemaphoreSupported) {
+        deviceInfo.pNext = &timelineFeatures;
+    }
 
     VK_CHECK(vkCreateDevice(ctx.physicalDevice, &deviceInfo, nullptr, &ctx.device));
     vkGetDeviceQueue(ctx.device, ctx.queueFamilyIndex, 0, &ctx.queue);

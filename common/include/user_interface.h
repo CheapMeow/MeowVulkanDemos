@@ -12,11 +12,13 @@ struct UserInterface {
     VkDescriptorPool descriptorPool;
 };
 
-// renderPass 是界面最终被记录进去的那个渲染通道。
+// renderPass 是界面最终被记录进去的那个渲染通道，subpass 是它里面的子通道号，界面
+// 绘制落在该子通道的第一个颜色附件上。
 // caseTexts 必须覆盖 case 自己面板会用到的全部字符串，以及它自己那批计时项的显示名，
 // 字形范围与启动时的逐字形校验都以这份集合为准
 void createUserInterface(const VulkanContext& ctx, VkRenderPass renderPass,
-                         const char* const* caseTexts, int caseTextCount, UserInterface& ui);
+                         const char* const* caseTexts, int caseTextCount, UserInterface& ui,
+                         uint32_t subpass = 0);
 void destroyUserInterface(const VulkanContext& ctx, UserInterface& ui);
 
 // 开始一帧界面，随后构建控件

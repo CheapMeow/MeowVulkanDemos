@@ -37,6 +37,7 @@
 | [`cases/depth_of_field`](cases/depth_of_field/README.md) | 景深与散景，对比普通高斯与弥散圆感知的圆盘收集 |
 | [`cases/texture_filtering`](cases/texture_filtering/README.md) | 高阶纹理过滤，对比五种重建核与理想重建的误差与代价 |
 | [`cases/noise`](cases/noise/README.md) | 程序化噪声，对比值噪声、梯度噪声、细胞噪声与多倍频叠加 |
+| [`cases/synchronization`](cases/synchronization/README.md) | 八种同步方式表达同一个依赖，对照掩码、主机阻塞与耗时 |
 
 ## 目录结构
 

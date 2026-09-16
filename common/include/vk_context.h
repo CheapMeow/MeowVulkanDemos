@@ -23,6 +23,7 @@ struct VulkanContext {
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger;
     bool debugUtilsEnabled;  // VK_EXT_debug_utils 是否可用，请求验证层时必须有它
+    uint32_t apiVersion;     // 与物理设备能力取较小值之后的实际 API 版本
     VkSurfaceKHR surface;
 
     VkPhysicalDevice physicalDevice;
@@ -33,6 +34,8 @@ struct VulkanContext {
     VkDevice device;
     VkQueue queue;
     VkCommandPool commandPool;
+    // 时间线信号量的特性是否已经启用。同步 case 依赖它，其余 case 不看这一项
+    bool timelineSemaphoreSupported;
 
     VkSwapchainKHR swapchain;
     VkFormat swapchainFormat;

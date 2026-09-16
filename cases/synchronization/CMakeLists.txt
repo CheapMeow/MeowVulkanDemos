@@ -1,0 +1,21 @@
+# synchronization case：八种同步方式表达同一个依赖，画面必须一致
+meow_add_case(synchronization
+    SOURCES
+        src/renderer.cpp
+        src/case_ui.cpp
+        src/timing_items.cpp
+    DESKTOP_ENTRY
+        src/main.cpp
+    ANDROID_ENTRY
+        src/android_main.cpp
+    SHADERS
+        shaders/fullscreen.vert
+        shaders/pattern.comp
+        shaders/pattern.frag
+        shaders/consume.frag
+        shaders/consume_input.frag
+    SHADER_INCLUDES
+        shaders/pattern_uniform.glsl
+        shaders/pattern_common.glsl
+        shaders/consume_common.glsl
+)
