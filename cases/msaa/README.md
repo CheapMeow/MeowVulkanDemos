@@ -4,23 +4,26 @@
 
 ## 简介
 
-三个子场景共用一套几何提交：形状的位置、尺寸与透明度放在实例缓冲里，顶点着色器按顶点编号推出矩形角点，一次实例化绘制完成。
+三个子场景共用一套几何提交：形状的位置、尺寸与透明度放在实例缓冲里，每个子场景占用连续的一段（[`src/renderer.cpp:591-621`](src/renderer.cpp#L591-L621)
+），顶点着色器按顶点编号推出矩形角点（[`shaders/shape.vert:19-22`](shaders/shape.vert#L19-L22)
+），一次实例化绘制完成一个子场景（[`src/renderer.cpp:898`](src/renderer.cpp#L898)）。
 
 | 子场景 | 内容 |
 | --- | --- |
-| 全屏三角 | 两块形状铺满视口，内部处处被单一图元覆盖 |
-| 交叠三角与植被 | 一批相互交叠、边缘留有背景的形状，其中一片走镂空的 alpha test |
-| 高动态范围 | 背景亮度远高于 1，形状很暗 |
+| 全屏三角 | 两块形状铺满视口，内部处处被单一图元覆盖（[`src/renderer.cpp:597-601`](src/renderer.cpp#L597-L601)） |
+| 交叠三角与植被 | 一批相互交叠、边缘留有背景的形状，其中一片走镂空的 alpha test（[`src/renderer.cpp:603-614`](src/renderer.cpp#L603-L614)） |
+| 高动态范围 | 背景亮度远高于 1，形状很暗（[`src/renderer.cpp:616-620`](src/renderer.cpp#L616-L620)） |
 
 | 控件 | 说明 |
 | --- | --- |
-| 采样数 | 1x、2x、4x、8x，超过设备上限时自动降档 |
-| 解析方式 | 硬件盒式解析，或者逐采样点编码、求平均、解码 |
-| 镂空走 alpha to coverage | 打开时镂空形状用 alpha to coverage，关闭时用 alpha test |
-| 片元开销 | 片元着色器里循环的次数 |
+| 采样数 | 1x、2x、4x、8x，超过设备上限时自动降档（[`src/main.cpp:164-177`](src/main.cpp#L164-L177)） |
+| 解析方式 | 硬件盒式解析，或者逐采样点编码、求平均、解码（[`shaders/resolve_custom.frag:15-27`](shaders/resolve_custom.frag#L15-L27)） |
+| 镂空走 alpha to coverage | 打开时镂空形状用 alpha to coverage，关闭时用 alpha test（[`shaders/shape.frag:49-59`](shaders/shape.frag#L49-L59)） |
+| 片元开销 | 片元着色器里循环的次数（[`shaders/shape.frag:29-41`](shaders/shape.frag#L29-L41)） |
 | 背景亮度 | 高动态范围子场景的背景亮度 |
 
-片元调用次数由片元着色器里的原子累加统计，帧末经缓冲回读。
+片元调用次数由片元着色器里的原子累加统计（[`shaders/shape.frag:45`](shaders/shape.frag#L45)），累加目标是一块主机可见的存储缓冲，帧末在等过栅栏之后回读并清零（
+[`src/renderer.cpp:811-816`](src/renderer.cpp#L811-L816)）。
 
 ## 渲染流程
 
@@ -35,25 +38,41 @@ graph LR
     F --> G[交换链图像]
 ```
 
-几何通道写多重采样的颜色（半精度浮点，背景亮度可以超过 1）与深度；解析把多重采样结果合成到单采样浮点贴图；最后一个全屏三角形做色调映射与输出编码。采样数为一的时候没有采样点可解析，直接把颜色附件拷到解析目标。
+几何通道写多重采样的颜色与深度，颜色附件用半精度浮点，背景亮度可以超过 1（[`src/renderer.cpp:12-13`](src/renderer.cpp#L12-L13)
+），颜色与深度两个附件都按当前采样数创建，解析目标固定为单采样（[`src/renderer.cpp:189-199`](src/renderer.cpp#L189-L199)
+）；解析把多重采样结果合成到单采样浮点贴图（[`src/renderer.cpp:1002-1004`](src/renderer.cpp#L1002-L1004)
+）；最后一个全屏三角形做色调映射与输出编码（[`shaders/tonemap.frag:9-12`](shaders/tonemap.frag#L9-L12)
+）。采样数为一的时候没有采样点可解析，直接把颜色附件拷到解析目标（[`src/renderer.cpp:988-1000`](src/renderer.cpp#L988-L1000)）。
 
 ## 实现要点
 
 ### 着色次数不随采样数放大
 
-片元着色按每像素每图元执行一次，多重采样只在光栅化与深度测试阶段按采样点处理，着色器本身只跑一次。片元调用计数的实测在 1x、4x、8x 下分别是 312403、319195、320972，相差不到百分之三，这点差别来自边界像素上被部分覆盖的图元被再次计入。
+片元着色按每像素每图元执行一次，多重采样只在光栅化与深度测试阶段按采样点处理，着色器本身只跑一次：采样数只写进管线的 `rasterizationSamples`
+（[`src/renderer.cpp:352-354`](src/renderer.cpp#L352-L354)），片元着色器入口处的计数加一与采样数无关（
+[`shaders/shape.frag:43-45`](shaders/shape.frag#L43-L45)）。片元调用计数的实测在 1x、4x、8x 下分别是 312403、319195、320972，
+相差不到百分之三，这点差别来自边界像素上被部分覆盖的图元被再次计入。
 
 ### 只改变边缘
 
-多重采样只在同一个像素被多个图元或背景共同覆盖的边界处改变结果。全屏三角内部处处被单一图元覆盖，1x 与 4x 的抓帧逐像素完全一致；交叠子场景的差别集中在形状的边缘，实测 1.18% 的像素不同。
+多重采样只在同一个像素被多个图元或背景共同覆盖的边界处改变结果。全屏三角的两块形状铺满视口，内部处处被单一图元覆盖（
+[`src/renderer.cpp:597-601`](src/renderer.cpp#L597-L601)），1x 与 4x 的抓帧逐像素完全一致；交叠子场景的每个形状按实例编号转过一个角度、取一个深度（
+[`shaders/shape.vert:24-32`](shaders/shape.vert#L24-L32)），边缘与交叠处才有采样点可以取舍，实测 1.18% 的像素不同。
 
 ### 高动态范围的解析顺序
 
-按线性值求平均再色调映射，边界上的平均值会落在高光与暗部之间，色调映射把这段压扁，边界看起来没有抗锯齿；先把各采样点编码到感知空间求平均、再解码回来，过渡带才与硬件盒式解析的观感接近。两种解析方式在本 case 的交叠子场景上相差 0.45% 的像素。
+硬件盒式解析按线性值求平均，边界上的平均值会落在高光与暗部之间，色调映射把这段压扁（[`shaders/tonemap.frag:10-12`](shaders/tonemap.frag#L10-L12)
+），边界看起来没有抗锯齿；自定义解析先把各采样点编码到感知空间（[`shaders/resolve_custom.frag:22-23`](shaders/resolve_custom.frag#L22-L23)
+），按采样数求平均（[`shaders/resolve_custom.frag:26`](shaders/resolve_custom.frag#L26)
+），再解码回来（[`shaders/resolve_custom.frag:27`](shaders/resolve_custom.frag#L27)
+），过渡带才与硬件盒式解析的观感接近。两种解析方式在本 case 的交叠子场景上相差 0.45% 的像素。
 
 ### alpha to coverage
 
-alpha to coverage 用片元输出的 alpha 对已通过覆盖与深度测试的采样点再做一次概率判定，给 alpha test 的硬边补上过渡。它需要采样数大于一，且管线状态与深度写入都要配合。
+alpha to coverage 用片元输出的 alpha（[`shaders/shape.frag:57`](shaders/shape.frag#L57)
+）对已通过覆盖与深度测试的采样点再做一次概率判定，给 alpha test 的硬边补上过渡。它需要采样数大于一，且管线状态与深度写入都要配合：两条几何管线由同一个循环建出，
+只有 `alphaToCoverageEnable` 一项不同（[`src/renderer.cpp:377-401`](src/renderer.cpp#L377-L401)
+），绘制时只有开关打开、采样数大于一且不是全屏背景子场景才选 coverage 管线（[`src/renderer.cpp:894-897`](src/renderer.cpp#L894-L897)）。
 
 ## 界面控件
 
@@ -116,7 +135,8 @@ build\meow_msaa.exe --auto-exit 4 --no-interface --scene 1 --samples 4 --resolve
 adb -s <serial> forward tcp:21000 tcp:21000
 ```
 
-桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`samples`/`resolve`/`scene`/`coverage`/`fragment-cost`/`background` 改配置，`begin` 与 `end` 圈定一段测量，`quit` 退出。
+桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`samples`/`resolve`/`scene`/`coverage`/`fragment-cost`/
+`background` 改配置，`begin` 与 `end` 圈定一段测量，`quit` 退出。
 
 ## 源码结构
 

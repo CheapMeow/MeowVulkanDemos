@@ -4,9 +4,13 @@
 
 ## 简介
 
-一块只有四个顶点的大地面，从相机脚边一直铺到远处的近地平线位置，纹理坐标横跨整块地面。相机贴近地面、向下压一个不大的俯角，于是同一个图元的近端与远端在屏幕上的深度相差悬殊。
+一块只有四个顶点的大地面，从相机脚边一直铺到远处的近地平线位置，纹理坐标横跨整块地面
+（[`src/scene_setup.cpp:6-12`](src/scene_setup.cpp#L6-L12)）。相机贴近地面、向下压一个不大的俯角，
+于是同一个图元的近端与远端在屏幕上的深度相差悬殊（[`src/main.cpp:196-202`](src/main.cpp#L196-L202)）。
 
-纹理图案由纹理坐标在片元着色器里程序生成，不引入贴图资源（`shaders/interp.frag:15-27`），密度由 `PATTERN_FREQUENCY` 给出（`src/main.cpp:28`）：
+纹理图案由纹理坐标在片元着色器里程序生成，不引入贴图资源（[`shaders/interp.frag:15-27`](shaders/interp.frag#L15-L27)），
+密度由 `PATTERN_FREQUENCY` 给出（[`src/main.cpp:28`](src/main.cpp#L28)），与插值模式、图案编号一起打包进
+uniform 的 `options` 分量（[`src/main.cpp:76-77`](src/main.cpp#L76-L77)）：
 
 | 图案 | 说明 |
 | --- | --- |
@@ -17,9 +21,9 @@
 
 | 模式 | 说明 |
 | --- | --- |
-| 透视矫正 | 硬件默认路径，插值属性除以深度与深度倒数后在片元里相除 |
-| 仿射 | 纹理坐标按屏幕坐标线性插值，不做透视除法还原 |
-| 差值图 | 两种插值给出的纹理坐标之差的模长，放大成灰度热力图 |
+| 透视矫正 | 硬件默认路径，插值属性除以深度与深度倒数后在片元里相除（[`shaders/interp.vert:6`](shaders/interp.vert#L6)） |
+| 仿射 | 纹理坐标按屏幕坐标线性插值，不做透视除法还原（[`shaders/interp.vert:9`](shaders/interp.vert#L9)） |
+| 差值图 | 两种插值给出的纹理坐标之差的模长，放大成灰度热力图（[`shaders/interp.frag:38-43`](shaders/interp.frag#L38-L43)） |
 
 ## 渲染流程
 
@@ -33,13 +37,25 @@ graph LR
     E --> F[交换链图像]
 ```
 
+顶点着色器只做两件事：把视图投影矩阵乘上顶点位置交给裁剪空间（[`shaders/interp.vert:21`](shaders/interp.vert#L21)），
+并把同一个纹理坐标写进两个输出（[`shaders/interp.vert:19-20`](shaders/interp.vert#L19-L20)）。两个输出的差别只有
+插值限定符（[`shaders/interp.vert:6-9`](shaders/interp.vert#L6-L9)），光栅化阶段据此分两条路径插值。片元着色器按
+`options` 的 x 分量选一路输出（[`shaders/interp.frag:31-33`](shaders/interp.frag#L31-L33)、
+[`shaders/interp.frag:46`](shaders/interp.frag#L46)）。整帧只有一次索引绘制，四个顶点六个索引
+（[`src/renderer.cpp:436-442`](src/renderer.cpp#L436-L442)），固定功能状态在创建管线时确定
+（[`src/renderer.cpp:156-252`](src/renderer.cpp#L156-L252)）。
+
 ## 实现要点
 
 ### 两条插值路径
 
-顶点着色器把同一个纹理坐标写进两个输出（`shaders/interp.vert:19-20`）：一个是普通的平滑输出，光栅化时按透视矫正插值；另一个带 `noperspective` 限定符（`shaders/interp.vert:9`、`shaders/interp.frag:4`），光栅化时在屏幕空间线性插值。
+顶点着色器把同一个纹理坐标写进两个输出（[`shaders/interp.vert:19-20`](shaders/interp.vert#L19-L20)）：
+一个是普通的平滑输出（[`shaders/interp.vert:6`](shaders/interp.vert#L6)），光栅化时按透视矫正插值；
+另一个带 `noperspective` 限定符（[`shaders/interp.vert:9`](shaders/interp.vert#L9)、
+[`shaders/interp.frag:4`](shaders/interp.frag#L4)），光栅化时在屏幕空间线性插值。
 
-记片元在三角形屏幕投影上的重心权重为 $\lambda_i$，三个顶点的属性为 $A_i$、裁剪坐标的第四分量为 $w_i$，两条路径给出的属性分别是
+记片元在三角形屏幕投影上的重心权重为 $\lambda_i$，三个顶点的属性为 $A_i$、
+裁剪坐标的第四分量为 $w_i$，两条路径给出的属性分别是
 
 $$
 A_{\text{仿射}} = \sum_i \lambda_i A_i
@@ -47,9 +63,20 @@ A_{\text{仿射}} = \sum_i \lambda_i A_i
 A_{\text{透视}} = \frac{\sum_i \lambda_i A_i / w_i}{\sum_i \lambda_i / w_i}
 $$
 
-左边是屏幕重心权重直接加权顶点属性，`noperspective` 限定符让光栅化阶段做这件事。右边是硬件默认路径，光栅化阶段插值的量是 $A_i / w_i$ 与 $1 / w_i$，片元里把两者相除。两个式子的由来见下面的「透视矫正插值的推导」。
+左边是屏幕重心权重直接加权顶点属性，`noperspective` 限定符让光栅化阶段做这件事；右边是硬件默认路径，
+光栅化阶段插值的量是 $A_i / w_i$ 与 $1 / w_i$，片元里把两者相除
+（[`shaders/interp.frag:35-36`](shaders/interp.frag#L35-L36)）。
+两个式子的由来见下面的「透视矫正插值的推导」。
 
-两条路径共用一套管线、一个着色器与一次绘制（管线在 `src/renderer.cpp:156-252` 创建，绘制在 `src/renderer.cpp:436-442`），切换只改 uniform 里的一位：模式、图案与棋盘格密度打包在 `options` 里（`src/renderer.h:24-28`），桌面端每帧在 `src/main.cpp:69-78` 填充，安卓端在 `src/android_main.cpp:100-109` 填充，片元着色器按 `options.x` 选一路输出（`shaders/interp.frag:31-33`、`shaders/interp.frag:46`）。模式取值来自界面（`src/case_ui.cpp:102-110`）、命令行（`src/main.cpp:107-131`）与 TCP 命令（`src/main.cpp:244-272`）三处，写进同一份状态。
+两条路径共用一套管线、一个着色器与一次绘制（管线在 [`src/renderer.cpp:156-252`](src/renderer.cpp#L156-L252)
+创建，绘制在 [`src/renderer.cpp:436-442`](src/renderer.cpp#L436-L442)），切换只改 uniform 里的一位：模式、图案与
+棋盘格密度打包在 `options` 里（[`src/renderer.h:24-28`](src/renderer.h#L24-L28)），桌面端每帧在
+[`src/main.cpp:69-78`](src/main.cpp#L69-L78) 填充，安卓端在
+[`src/android_main.cpp:100-109`](src/android_main.cpp#L100-L109) 填充，片元着色器按 `options.x` 选一路输出
+（[`shaders/interp.frag:31-33`](shaders/interp.frag#L31-L33)、[`shaders/interp.frag:46`](shaders/interp.frag#L46)）。
+模式取值来自界面（[`src/case_ui.cpp:101-105`](src/case_ui.cpp#L101-L105)）、命令行
+（[`src/main.cpp:107-118`](src/main.cpp#L107-L118)）与 TCP 命令（[`src/main.cpp:244-254`](src/main.cpp#L244-L254)）
+三处，写进同一份状态。
 
 ### 透视投影矩阵与透视除法
 
@@ -59,9 +86,19 @@ $$
 d = -z_v
 $$
 
-投影矩阵由 `glm::perspective` 生成（`common/src/scene.cpp:156-159`）。仓库定义了 `GLM_FORCE_DEPTH_ZERO_TO_ONE`（`CMakeLists.txt:111`），归一化深度的区间是 0 到 1；Vulkan 的裁剪空间 Y 轴朝下，矩阵的 $[1][1]$ 元素取反。垂直视场的半角切线记作 $t = \tan(\theta/2)$，宽高比记作 $a$，近平面与远平面记作 $n$ 与 $f$（`src/main.cpp:199-202`）。
+投影矩阵由 `glm::perspective` 生成（[`../../common/src/scene.cpp:156-157`](../../common/src/scene.cpp#L156-L157)）。
+仓库定义了 `GLM_FORCE_DEPTH_ZERO_TO_ONE`（[`../../CMakeLists.txt:111`](../../CMakeLists.txt#L111)），归一化深度的区间是
+0 到 1；Vulkan 的裁剪空间 Y 轴朝下，矩阵的 $[1][1]$ 元素取反
+（[`../../common/src/scene.cpp:158-159`](../../common/src/scene.cpp#L158-L159)）。垂直视场的半角切线记作
+$t = \tan(\theta/2)$（[`src/main.cpp:199`](src/main.cpp#L199)），宽高比记作 $a$
+（[`src/main.cpp:371-372`](src/main.cpp#L371-L372)），近平面与远平面记作 $n$ 与 $f$
+（[`src/main.cpp:200-201`](src/main.cpp#L200-L201)）。
 
-图形驱动接受的顶点位置是归一化设备坐标（Normalized Device Coordinates，NDC），投影矩阵输出的是四个分量的齐次坐标。齐次坐标的第四个分量为 1 时前三个分量就是坐标本身，所以把前三个分量除以第四个分量就落回归一化设备坐标。这一次相除叫透视除法：
+图形驱动接受的顶点位置是归一化设备坐标（Normalized Device Coordinates，NDC），
+投影矩阵输出的是四个分量的齐次坐标。齐次坐标的第四个分量为 1 时前三个分量就是坐标本身，
+所以把前三个分量除以第四个分量就落回归一化设备坐标。这一次相除叫透视除法。顶点着色器交给
+`gl_Position` 的就是四个分量的裁剪坐标（[`shaders/interp.vert:21`](shaders/interp.vert#L21)），
+相除以及随后的视口变换由光栅化阶段完成：
 
 $$
 x_{\text{ndc}} = \frac{x_{\text{clip}}}{w_{\text{clip}}}, \qquad
@@ -69,7 +106,9 @@ y_{\text{ndc}} = \frac{y_{\text{clip}}}{w_{\text{clip}}}, \qquad
 z_{\text{ndc}} = \frac{z_{\text{clip}}}{w_{\text{clip}}}
 $$
 
-矩阵的四行由四个条件定出：视锥的左右两个侧面落在 $x_{\text{ndc}} = \pm 1$，上下两个侧面落在 $y_{\text{ndc}} = \pm 1$，近平面与远平面落在 $z_{\text{ndc}} = 0$ 与 $z_{\text{ndc}} = 1$，第四个分量留成视线方向上的距离：
+矩阵的四行由四个条件定出：视锥的左右两个侧面落在 $x_{\text{ndc}} = \pm 1$，
+上下两个侧面落在 $y_{\text{ndc}} = \pm 1$，近平面与远平面落在 $z_{\text{ndc}} = 0$ 与 $z_{\text{ndc}} = 1$，
+第四个分量留成视线方向上的距离：
 
 $$
 \begin{aligned}
@@ -78,7 +117,9 @@ z_{\text{clip}} &= A\,z_v + B, & w_{\text{clip}} &= -z_v = d
 \end{aligned}
 $$
 
-前两行满足侧面条件：左右侧面是过相机的平面 $x_v = \pm a\,t\,d$，代进去得 $x_{\text{clip}} = \pm d$，除以 $w_{\text{clip}} = d$ 恒等于 $\pm 1$，整个侧面都落在边界上，与点的远近无关；上下侧面同理，Y 分量上的负号把屏幕纵轴翻成朝下。
+前两行满足侧面条件：左右侧面是过相机的平面 $x_v = \pm a\,t\,d$，代进去得 $x_{\text{clip}} = \pm d$，
+除以 $w_{\text{clip}} = d$ 恒等于 $\pm 1$，整个侧面都落在边界上，与点的远近无关；
+上下侧面同理，Y 分量上的负号把屏幕纵轴翻成朝下。
 
 第三行取成 $z_v$ 的一次函数，两个系数由深度的两个端点条件解出：
 
@@ -100,7 +141,11 @@ $$
 \frac{1}{w_{\text{clip}}} = \frac{1}{d} = \frac{1}{n} + \frac{n - f}{f\,n}\,z_{\text{ndc}}
 $$
 
-透视除法带来两个结果。横向上 $x_{\text{ndc}} = \dfrac{x_v}{a\,t\,d}$，同样大小的横向偏移在越远的地方占的屏幕宽度越小，这就是近大远小。深度上归一化深度与倒数距离成一次关系，深度缓冲的档位因此按倒数距离分布，近处的深度分辨率高于远处。
+透视除法带来两个结果。横向上 $x_{\text{ndc}} = \dfrac{x_v}{a\,t\,d}$，
+同样大小的横向偏移在越远的地方占的屏幕宽度越小，这就是近大远小。
+深度上归一化深度与倒数距离成一次关系，深度缓冲的档位因此按倒数距离分布，近处的深度分辨率高于远处；
+这块地面只做深度测试与深度写入，深度比较函数取 `VK_COMPARE_OP_LESS`
+（[`src/renderer.cpp:210-214`](src/renderer.cpp#L210-L214)）。
 
 ### 透视矫正插值的推导
 
@@ -118,6 +163,16 @@ $$
 
 两组权重各自满足 $\sum_i \mu_i = 1$ 与 $\sum_i \lambda_i = 1$。
 
+表里的量各自落在源码的哪一处：$P$ 与 $P_i$ 是顶点缓冲里的顶点位置
+（[`src/scene_setup.cpp:6-11`](src/scene_setup.cpp#L6-L11)）；$\mathrm{clip}$ 是视图投影矩阵乘上顶点位置的结果
+（[`shaders/interp.vert:21`](shaders/interp.vert#L21)），矩阵由
+[`../../common/src/scene.cpp:156-159`](../../common/src/scene.cpp#L156-L159) 生成，它的第四行给出
+$w_{\text{clip}} = d$；$\mathbf{p}$ 与 $\mathbf{p}_i$ 是透视除法之后的屏幕位置，由光栅化阶段算出；
+$\lambda_i$ 是光栅化阶段按 `noperspective` 限定符直接给出的屏幕重心权重
+（[`shaders/interp.vert:9`](shaders/interp.vert#L9)）；$A$ 与 $A_i$ 是纹理坐标
+（[`shaders/interp.vert:19-20`](shaders/interp.vert#L19-L20)），在片元着色器里被消费
+（[`shaders/interp.frag:35-36`](shaders/interp.frag#L35-L36)）。
+
 #### 一、要算的量
 
 纹理坐标这类属性在三角形上按顶点铺开，也就是它是平面位置的仿射函数。平面上的点写成顶点的仿射组合
@@ -132,11 +187,14 @@ $$
 A = \sum_i \mu_i A_i
 $$
 
-这就是要算的精确值。片元着色器拿到的是屏幕重心权重 $\lambda_i$，所以问题化成把 $\mu_i$ 用 $\lambda_i$ 表示。
+这就是要算的精确值。片元着色器拿到的是屏幕重心权重 $\lambda_i$
+（[`shaders/interp.frag:4`](shaders/interp.frag#L4)），所以问题化成把 $\mu_i$ 用 $\lambda_i$ 表示。
 
 #### 二、两组权重的换算
 
-投影矩阵 $M$ 作用在齐次坐标 $(P, 1)$ 上是线性映射。由 $\sum_i \mu_i = 1$ 得 $(P, 1) = \sum_i \mu_i (P_i, 1)$，线性映射可以移进求和号：
+投影矩阵 $M$（[`../../common/src/scene.cpp:156-159`](../../common/src/scene.cpp#L156-L159)）
+作用在齐次坐标 $(P, 1)$ 上是线性映射。由 $\sum_i \mu_i = 1$ 得
+$(P, 1) = \sum_i \mu_i (P_i, 1)$，线性映射可以移进求和号：
 
 $$
 \mathrm{clip} = M \sum_i \mu_i (P_i, 1) = \sum_i \mu_i \, M (P_i, 1) = \sum_i \mu_i \, \mathrm{clip}_i
@@ -190,7 +248,10 @@ $$
 
 #### 三、硬件插值的是哪两个量
 
-光栅化阶段能做的只有一件事：把顶点上的值按屏幕重心权重加权。透视矫正式子的分子是拿顶点值 $A_i / w_i$ 这样加权，分母是拿顶点值 $1 / w_i$ 这样加权，两者都在光栅化阶段的能力之内：
+光栅化阶段能做的只有一件事：把顶点上的值按屏幕重心权重加权。
+透视矫正式子的分子是拿顶点值 $A_i / w_i$ 这样加权，分母是拿顶点值 $1 / w_i$ 这样加权，
+两者都在光栅化阶段的能力之内。顶点着色器里对两个输出只改了限定符，`noperspective` 那一路正是这件事
+（[`shaders/interp.vert:7-9`](shaders/interp.vert#L7-L9)）：
 
 $$
 \widetilde{A} = \sum_i \lambda_i \frac{A_i}{w_i},
@@ -202,9 +263,14 @@ $$
 
 #### 四、被插值的两个量在屏幕上是一次函数
 
-屏幕重心权重的加权与「按屏幕坐标的一次函数变化」是同一件事：$\lambda_i$ 本身是屏幕坐标的一次函数，加权和于是也是一次函数，硬件因此可以按逐像素的固定增量推进。剩下要确认的是 $1/w$ 与 $A/w$ 作为屏幕坐标的函数确实是一次的。
+屏幕重心权重的加权与「按屏幕坐标的一次函数变化」是同一件事：$\lambda_i$ 本身是屏幕坐标的一次函数，
+加权和于是也是一次函数，硬件因此可以按逐像素的固定增量推进。
+剩下要确认的是 $1/w$ 与 $A/w$ 作为屏幕坐标的函数确实是一次的。
 
-三角形所在的平面在视图空间里写成 $\mathbf{k} \cdot P = c$。屏幕上一点对应的视线取方向 $\mathbf{u} = (u_x, u_y, -1)$，第三个分量固定为 $-1$，视线上的点写成 $P = \tau\,\mathbf{u}$。这样取定之后 $\tau$ 就等于 $-z_v$，也就是 $d$，也就是 $w$（投影矩阵的第四行给出 $w_{\text{clip}} = -z_v$）。把 $P = \tau\,\mathbf{u}$ 代进平面方程：
+三角形所在的平面在视图空间里写成 $\mathbf{k} \cdot P = c$。屏幕上一点对应的视线取方向
+$\mathbf{u} = (u_x, u_y, -1)$，第三个分量固定为 $-1$，视线上的点写成 $P = \tau\,\mathbf{u}$。
+这样取定之后 $\tau$ 就等于 $-z_v$，也就是 $d$，也就是 $w$
+（投影矩阵的第四行给出 $w_{\text{clip}} = -z_v$）。把 $P = \tau\,\mathbf{u}$ 代进平面方程：
 
 $$
 \tau\,(k_x u_x + k_y u_y - k_z) = c
@@ -212,17 +278,23 @@ $$
 \frac{1}{w} = \frac{1}{\tau} = \frac{k_x u_x + k_y u_y - k_z}{c}
 $$
 
-$(u_x, u_y)$ 与屏幕坐标只差常数缩放：由 $x_{\text{ndc}} = \dfrac{x_v}{a\,t\,d}$ 与 $x_v = \tau\,u_x = d\,u_x$ 得 $u_x = a\,t\,x_{\text{ndc}}$，同理 $u_y = -t\,y_{\text{ndc}}$。所以 $1/w$ 是屏幕坐标的一次函数。
+$(u_x, u_y)$ 与屏幕坐标只差常数缩放：由 $x_{\text{ndc}} = \dfrac{x_v}{a\,t\,d}$ 与 $x_v = \tau\,u_x = d\,u_x$
+得 $u_x = a\,t\,x_{\text{ndc}}$，同理 $u_y = -t\,y_{\text{ndc}}$。所以 $1/w$ 是屏幕坐标的一次函数。
 
-属性是平面位置的仿射函数 $A = \mathbf{a} \cdot P + b$，代入 $P = w\,\mathbf{u}$ 之后除以 $w$：
+属性（这块地面上就是纹理坐标，[`src/scene_setup.cpp:7-10`](src/scene_setup.cpp#L7-L10)）是平面位置的仿射函数
+$A = \mathbf{a} \cdot P + b$，代入 $P = w\,\mathbf{u}$ 之后除以 $w$：
 
 $$
 \frac{A}{w} = \mathbf{a} \cdot \mathbf{u} + \frac{b}{w}
 $$
 
-右边第一项是 $(u_x, u_y)$ 的一次式（$\mathbf{u}$ 的第三个分量是常数），第二项是常数乘上一步已经证明的一次函数，所以 $A/w$ 也是屏幕坐标的一次函数。两个量都能由屏幕线性插值精确算出，相除得到的属性因此是该平面位置上的精确值。纹理坐标在这块地面上是位置的仿射函数，透视矫正路径给出的纹理坐标就是精确值。
+右边第一项是 $(u_x, u_y)$ 的一次式（$\mathbf{u}$ 的第三个分量是常数），
+第二项是常数乘上一步已经证明的一次函数，所以 $A/w$ 也是屏幕坐标的一次函数。
+两个量都能由屏幕线性插值精确算出，相除得到的属性因此是该平面位置上的精确值。
+纹理坐标在这块地面上是位置的仿射函数，透视矫正路径给出的纹理坐标就是精确值。
 
-归一化深度也落在这条结论里：上一节给出 $z_{\text{ndc}}$ 与 $1/d$ 成一次关系，$1/d$ 是屏幕坐标的一次函数，$z_{\text{ndc}}$ 因此也是，深度由屏幕线性插值直接得到，片元里不必再做相除。
+归一化深度也落在这条结论里：上一节给出 $z_{\text{ndc}}$ 与 $1/d$ 成一次关系，
+$1/d$ 是屏幕坐标的一次函数，$z_{\text{ndc}}$ 因此也是，深度由屏幕线性插值直接得到，片元里不必再做相除。
 
 ### 两条路径之差
 
@@ -232,7 +304,10 @@ $$
 A_{\text{仿射}} = \sum_i \lambda_i A_i
 $$
 
-上一节的换算说明两组权重只在各顶点的 $w_i$ 全部相等时才重合，偏差因此由图元两端的深度比决定。把这个偏差写成闭合形式：取图元上一条直线的两端，属性为 $A_0$ 与 $A_1$、裁剪坐标的第四个分量为 $w_0$ 与 $w_1$，线上的点用平面权重 $\mu$ 或屏幕权重 $\lambda$ 描述，两个权重都以 $A_1$ 那一端为 1。上一节的换算在两点情形下是
+上一节的换算说明两组权重只在各顶点的 $w_i$ 全部相等时才重合，偏差因此由图元两端的深度比决定。
+把这个偏差写成闭合形式：取图元上一条直线的两端，属性为 $A_0$ 与 $A_1$、
+裁剪坐标的第四个分量为 $w_0$ 与 $w_1$，线上的点用平面权重 $\mu$ 或屏幕权重 $\lambda$ 描述，
+两个权重都以 $A_1$ 那一端为 1。上一节的换算在两点情形下是
 
 $$
 \lambda = \frac{\mu\,w_1}{(1 - \mu)\,w_0 + \mu\,w_1},
@@ -246,7 +321,8 @@ $$
 \mu = \frac{\lambda}{\lambda + (1 - \lambda)\,\rho}
 $$
 
-两条路径分别是 $A_{\text{透视}} = (1 - \mu)A_0 + \mu A_1$ 与 $A_{\text{仿射}} = (1 - \lambda)A_0 + \lambda A_1$，相减之后只剩权重之差：
+两条路径分别是 $A_{\text{透视}} = (1 - \mu)A_0 + \mu A_1$ 与
+$A_{\text{仿射}} = (1 - \lambda)A_0 + \lambda A_1$，相减之后只剩权重之差：
 
 $$
 A_{\text{透视}} - A_{\text{仿射}} = (\mu - \lambda)(A_1 - A_0)
@@ -267,13 +343,18 @@ $$
 
 $\rho$ 远大于 1 时 $\lambda^{\ast}$ 靠近 1，偏差的峰值压在图元的远端一侧，在这块地面上就是贴近地平线的那条高度。
 
-同一个 $\rho$ 还说明纵深在屏幕上的分布有多不均匀：屏幕位置取正中的 $\lambda = 1/2$ 时平面权重是 $\mu = 1 / (1 + \rho)$，$\rho$ 大时它接近 0，图元绝大部分的纵深挤在屏幕靠远端的一条窄带里。仿射路径按屏幕权重铺纹理坐标，等于把这条窄带摊到整幅画面。
+同一个 $\rho$ 还说明纵深在屏幕上的分布有多不均匀：屏幕位置取正中的 $\lambda = 1/2$ 时平面权重是
+$\mu = 1 / (1 + \rho)$，$\rho$ 大时它接近 0，图元绝大部分的纵深挤在屏幕靠远端的一条窄带里。
+仿射路径按屏幕权重铺纹理坐标，等于把这条窄带摊到整幅画面。
 
-场景的配置把 $\rho$ 拉得很大：四边形从相机脚边一直铺到远处（`src/main.cpp:25-28` 定义常量，`src/scene_setup.cpp:6-12` 生成顶点），相机贴近地面、向下压一个不大的俯角（`src/main.cpp:196-202`），近端与远端顶点的 $w$ 因此相差悬殊。
+场景的配置把 $\rho$ 拉得很大：四边形从相机脚边一直铺到远处（[`src/main.cpp:25-28`](src/main.cpp#L25-L28) 定义常量，
+[`src/scene_setup.cpp:6-12`](src/scene_setup.cpp#L6-L12) 生成顶点），相机贴近地面、向下压一个不大的俯角
+（[`src/main.cpp:196-202`](src/main.cpp#L196-L202)），近端与远端顶点的 $w$ 因此相差悬殊。
 
 ### 差值图
 
-差值图输出两种插值得到的纹理坐标之差的模长，乘以 1.2 后作为灰度（`shaders/interp.frag:38-43`）：
+差值图输出两种插值得到的纹理坐标之差的模长，乘以 1.2 后作为灰度
+（[`shaders/interp.frag:38-43`](shaders/interp.frag#L38-L43)）：
 
 $$
 \text{灰度} = \mathrm{clamp}\big(\lVert uv_{\text{透视}} - uv_{\text{仿射}} \rVert \cdot 1.2,\ 0,\ 1\big)
@@ -345,7 +426,8 @@ build\meow_perspective_interpolation.exe --auto-exit 4 --no-interface --capture 
 adb -s <serial> forward tcp:21000 tcp:21000
 ```
 
-桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`interpolation`/`pattern`/`near-plane` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
+桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`interpolation`/`pattern`/`near-plane` 改配置，
+`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
 
 随时间变化的参数曲线与测量报告格式与间接绘制 case 一致，报告里的前三列是插值方式、图案与绘制命令条数。
 
@@ -366,19 +448,23 @@ adb -s <serial> forward tcp:21000 tcp:21000
 
 ## 安卓端差异
 
-- 实例与设备申请 Vulkan 1.1，着色器以 `--target-env=vulkan1.1` 编译，覆盖只支持 1.1 的设备；`minSdk` 24 是 Vulkan 1.0 的最低 API 等级。
-- 设备时间只在设备支持时间戳时测量：驱动的 `timestampComputeAndGraphics` 能力与图形队列族的 `timestampValidBits` 都满足才创建查询池并记录时间戳，不支持的设备上"设备时间"恒为零，主机侧各项计时照常。
+- 实例与设备申请 Vulkan 1.1，着色器以 `--target-env=vulkan1.1` 编译，
+  覆盖只支持 1.1 的设备；`minSdk` 24 是 Vulkan 1.0 的最低 API 等级。
+- 设备时间只在设备支持时间戳时测量：驱动的 `timestampComputeAndGraphics` 能力与图形队列族的
+  `timestampValidBits` 都满足才创建查询池并记录时间戳，不支持的设备上"设备时间"恒为零，主机侧各项计时照常。
 - GPU 锁频面板不显示：它依赖桌面的 `nvidia-smi`。
 - 相机固定在初始化位置，没有键盘输入；触摸事件交给 ImGui 的安卓后端，面板上的滑块和按钮可以直接操作。
 - 帧率上限 60 FPS，避免无界空转发热。
 
 ### 安卓测试方法
 
-adb 的目标设备由设备序列号指定，序列号用 `adb devices` 查询。只连接一台设备时命令里的 `-s <serial>` 可以省略。构建出 APK 后按下面方式安装并查看日志：
+adb 的目标设备由设备序列号指定，序列号用 `adb devices` 查询。只连接一台设备时命令里的
+`-s <serial>` 可以省略。构建出 APK 后按下面方式安装并查看日志：
 
 ```
 adb -s <serial> install -r android\app\build\outputs\apk\debug\app-debug.apk
 adb -s <serial> logcat -s MeowVulkanDemo
 ```
 
-应用内置回环 TCP 控制服务（桌面与安卓一致，端口 21000），安卓端经 `adb forward tcp:21000 tcp:21000` 把设备上的控制端口映射到本机，命令与桌面端相同。
+应用内置回环 TCP 控制服务（桌面与安卓一致，端口 21000），
+安卓端经 `adb forward tcp:21000 tcp:21000` 把设备上的控制端口映射到本机，命令与桌面端相同。

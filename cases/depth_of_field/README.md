@@ -4,19 +4,23 @@
 
 ## 简介
 
-一块地面加五排按深度排布的小亮球，另有一个前景大球与一个背景大球。场景先画进一张高动态范围图像加一张深度图，深度附件同时当纹理采样，景深通道用它还原每个像素的视空间距离，再按薄透镜模型算弥散圆。
+一块地面加五排按深度排布的小亮球，另有一个前景大球与一个背景大球（[`src/scene_setup.cpp:68-100`](src/scene_setup.cpp#L68-L100)）。
+场景先画进一张高动态范围图像加一张深度图（[`src/renderer.cpp:35-90`](src/renderer.cpp#L35-L90)），深度附件同时当纹理采样
+（[`src/renderer.cpp:139-141`](src/renderer.cpp#L139-L141)），景深通道用它还原每个像素的视空间距离
+（[`shaders/dof.frag:24-30`](shaders/dof.frag#L24-L30)），再按薄透镜模型算弥散圆
+（[`shaders/dof.frag:33-45`](shaders/dof.frag#L33-L45)）。
 
 | 控件 | 取值 |
 | --- | --- |
-| 处理方式 | 关闭、普通高斯、圆盘收集 |
-| 焦距 / 光圈数 / 对焦距离 | 镜头参数 |
-| 弥散圆半径上限 | 1 到 64 像素 |
-| 采样数 | 4 到 512 |
-| 抖动强度 | 0 到 1，采样点绕圆盘旋转 |
-| 光圈叶片数 | 0 到 12，零表示圆形 |
-| 曝光倍数、平行光强度、环境项强度 | 场景与显示参数 |
+| 处理方式 | 关闭、普通高斯、圆盘收集（[`src/renderer.h:12-17`](src/renderer.h#L12-L17)） |
+| 焦距 / 光圈数 / 对焦距离 | 镜头参数（[`src/main.cpp:107-109`](src/main.cpp#L107-L109)） |
+| 弥散圆半径上限 | 1 到 64 像素（[`src/case_ui.cpp:102`](src/case_ui.cpp#L102)） |
+| 采样数 | 4 到 512（[`src/case_ui.cpp:104`](src/case_ui.cpp#L104)） |
+| 抖动强度 | 0 到 1，采样点绕圆盘旋转（[`shaders/dof.frag:58`](shaders/dof.frag#L58)） |
+| 光圈叶片数 | 0 到 12，零表示圆形（[`shaders/dof.frag:61-68`](shaders/dof.frag#L61-L68)） |
+| 曝光倍数、平行光强度、环境项强度 | 场景与显示参数（[`src/main.cpp:114-116`](src/main.cpp#L114-L116)） |
 
-关闭一档相当于针孔相机，所有深度都清楚，作为对照的基准。
+关闭一档相当于针孔相机，所有深度都清楚，作为对照的基准：这一档直接取中心像素的颜色经过色调映射，跳过全部采样（[`shaders/dof.frag:91-94`](shaders/dof.frag#L91-L94)）。
 
 ## 渲染流程
 
@@ -34,6 +38,18 @@ graph LR
     H --> I
     I --> J[交换链图像]
 ```
+
+场景通道用一次索引绘制把整套几何写进颜色与深度两个附件（[`src/renderer.cpp:665-687`](src/renderer.cpp#L665-L687)），
+几何的顶点格式里带一个自发光字段，小亮球因此远高于显示范围（[`src/scene_setup.cpp:84-93`](src/scene_setup.cpp#L84-L93)、
+[`shaders/scene.frag:26`](shaders/scene.frag#L26)）。深度附件在场景通道结束时写出内容并停在只读布局，
+之后可以当纹理读（[`src/renderer.cpp:47-54`](src/renderer.cpp#L47-L54)），
+采样时用最近邻，避免邻域深度被插值抹平（[`src/renderer.cpp:482-484`](src/renderer.cpp#L482-L484)）。
+
+景深通道挂在交换链图像上（[`src/renderer.cpp:92-131`](src/renderer.cpp#L92-L131)），一次全屏三角形绘制取来画面颜色与深度
+（[`src/renderer.cpp:702-709`](src/renderer.cpp#L702-L709)、
+[`shaders/fullscreen.vert:6-11`](shaders/fullscreen.vert#L6-L11)），按处理方式分成三支，最后统一走同一个色调映射与输出编码
+（[`shaders/dof.frag:86-136`](shaders/dof.frag#L86-L136)、
+[`shaders/dof.frag:72-84`](shaders/dof.frag#L72-L84)）。
 
 ## 实现要点
 
@@ -57,13 +73,21 @@ $$
 r_{px} = \frac{1}{2} \cdot \frac{c}{w_{sensor}} \cdot W_{image}
 $$
 
+两步合在片元着色器的 `circleOfConfusion` 里（[`shaders/dof.frag:33-45`](shaders/dof.frag#L33-L45)）：
+先乘出分母 $N \, z \, (z_f - f)$（[`shaders/dof.frag:39`](shaders/dof.frag#L39)），再算直径 $c$
+（[`shaders/dof.frag:43`](shaders/dof.frag#L43)），最后换算成像素半径（[`shaders/dof.frag:44`](shaders/dof.frag#L44)）。
+感光面宽度与镜头参数共用一套世界单位，着色器里取常数 0.036（[`shaders/dof.frag:35`](shaders/dof.frag#L35)），
+画面宽度从 uniform 里取（[`shaders/dof.frag:8`](shaders/dof.frag#L8)）。
+同一套公式在 CPU 侧另有一份实现（[`src/scene_setup.cpp:102-114`](src/scene_setup.cpp#L102-L114)）。
+
 默认参数（$f = 0.05$，$f/1.4$，对焦 2.9，感光面宽 0.036，画面宽 1600）下的半径：
 
 | 物距 | 0.80 | 1.20 | 1.60 | 2.00 | 2.40 | 2.90 | 3.60 | 4.50 | 6.00 | 8.00 | 12.00 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 半径（像素） | 36.55 | 19.73 | 11.31 | 6.27 | 2.90 | 0 | 2.71 | 4.95 | 7.19 | 8.88 | 10.56 |
 
-近景一侧的半径增长比远景快：同一个 $\lvert z - z_f \rvert$ 在近处对应的相对偏移更大。物距 0.8 处的半径已经超过 32 像素的上限，被钳住。
+近景一侧的半径增长比远景快：同一个 $\lvert z - z_f \rvert$ 在近处对应的相对偏移更大。物距 0.8 处的半径已经超过 32 像素的上限，被钳住
+（[`shaders/dof.frag:48-51`](shaders/dof.frag#L48-L51)）。
 
 同一物距换光圈：
 
@@ -84,17 +108,22 @@ f/8 比 f/2.8 明显更锐，但都低于关闭那一档；对焦距离从 2.9 �
 
 ### 从深度缓冲还原视空间距离
 
-深度缓冲里存的是投影之后的归一化深度，不是距离。用近远平面还原：
+深度缓冲里存的是投影之后的归一化深度，用近平面与远平面还原成视空间距离：
 
 $$
 z_{view} = \frac{near \cdot far}{far - d \cdot (far - near)}
 $$
 
-$d$ 是深度缓冲里读到的值，取值在 0 到 1 之间，$d = 0$ 对应近平面、$d = 1$ 对应远平面。这一步是精确的，不做任何近似：投影矩阵的第三行本来就是按这个关系构造的。
+$d$ 是深度缓冲里读到的值，取值在 0 到 1 之间，$d = 0$ 对应近平面、$d = 1$ 对应远平面。还原写成一个函数
+（[`shaders/dof.frag:24-30`](shaders/dof.frag#L24-L30)），近平面与远平面从 uniform 里取
+（[`shaders/dof.frag:8`](shaders/dof.frag#L8)），桌面端的取值是 0.1 与 30
+（[`src/main.cpp:22-23`](src/main.cpp#L22-L23)）。这一步是精确的，不做任何近似：投影矩阵由 `glm::perspective` 生成
+（[`../../common/src/scene.cpp:156-157`](../../common/src/scene.cpp#L156-L157)），归一化深度的区间是 0 到 1
+（[`../../CMakeLists.txt:111`](../../CMakeLists.txt#L111)），矩阵的第三行本来就是按这个关系构造的。
 
 ### 三种处理方式
 
-**普通高斯**只看中心像素的弥散圆，在它周围铺一圈固定的权重：
+**普通高斯**只看中心像素的弥散圆，在它周围铺一圈固定的权重（[`shaders/dof.frag:99-114`](shaders/dof.frag#L99-L114)）：
 
 $$
 L_o = \frac{\sum_{i} w_i \, L_i}{\sum_i w_i},
@@ -102,17 +131,21 @@ L_o = \frac{\sum_{i} w_i \, L_i}{\sum_i w_i},
 w_i = \exp\left(-2.5 \, \lVert o_i \rVert^2\right)
 $$
 
-采样点的位置是 $o_i$ 乘上中心像素的半径，权重与邻居的深度无关。它的毛病有两个方向：前景物体的模糊拉不出它本该盖住的那片背景，因为背景像素的半径很小、根本不会去收集远处的前景；反过来，对焦平面上的锐利物体又会被前景像素收进模糊里，造出一圈不该有的软边。
+采样点的位置是 $o_i$ 乘上中心像素的半径（[`shaders/dof.frag:108`](shaders/dof.frag#L108)），
+权重只由采样点离中心的距离决定（[`shaders/dof.frag:107`](shaders/dof.frag#L107)），与邻居的深度无关。它的毛病有两个方向：前景物体的模糊拉不出它本该盖住的那片背景，
+因为背景像素的半径很小、根本不会去收集远处的前景；反过来，对焦平面上的锐利物体又会被前景像素收进模糊里，造出一圈不该有的软边。
 
-**圆盘收集**每个采样点先算自己的弥散圆，够大才被采纳：
+**圆盘收集**每个采样点先算自己的弥散圆，够大才被采纳（[`shaders/dof.frag:117-135`](shaders/dof.frag#L117-L135)）：
 
 $$
 \text{采纳当且仅当} \quad r(\text{采样点}) \ge \lVert o_i \rVert
 $$
 
+中心像素无条件记入（[`shaders/dof.frag:119-120`](shaders/dof.frag#L119-L120)），
+其余采样点按这条规则筛（[`shaders/dof.frag:128-131`](shaders/dof.frag#L128-L131)）。
 这条规则的物理含义是：采样点所在的物点摊成的圆，半径必须够到当前像素。这样近景的模糊就能盖到背景上，而对焦平面上的锐利表面也不会被前景污染。
 
-采样点在圆盘上按黄金角螺旋排布，抖动项让每一帧的采样点整体旋转：
+采样点在圆盘上按黄金角螺旋排布，抖动项让整圈采样点一起旋转一个角度：
 
 $$
 r_i = \sqrt{\frac{i + 0.5}{N}},
@@ -120,13 +153,17 @@ r_i = \sqrt{\frac{i + 0.5}{N}},
 \theta_i = i \cdot 2.39996323 + \text{jitter} \cdot 2\pi
 $$
 
-叶片数大于零时把圆盘按角度裁成正多边形，得到六边形一类的散景形状：
+半径与角度的计算在 `diskSample` 里（[`shaders/dof.frag:54-59`](shaders/dof.frag#L54-L59)），
+`jitter` 从 uniform 的第三项取（[`shaders/dof.frag:10`](shaders/dof.frag#L10)）。叶片数大于零时把圆盘按角度裁成正多边形，得到六边形一类的散景形状：
 
 $$
 r_i \leftarrow \frac{r_i}{\max\left(\dfrac{\cos(\text{sector}/2)}{\cos(\text{local})},\ \epsilon\right)},
 \qquad
 \text{sector} = \frac{2\pi}{\text{blades}}
 $$
+
+裁剪把采样点的角度先折进所在扇区（[`shaders/dof.frag:64-65`](shaders/dof.frag#L64-L65)），
+再按扇区边界的内切圆半径与顶点半径之比缩放（[`shaders/dof.frag:66-67`](shaders/dof.frag#L66-L67)）。
 
 三种方式的画面（默认参数）：
 
@@ -136,11 +173,12 @@ $$
 | 关闭 与 普通高斯 | 2.0846 | 3.216% | 212 |
 | 普通高斯 与 圆盘收集 | 0.4357 | 1.255% | 184 |
 
-普通高斯与圆盘收集的差集中在物体的轮廓上：把画面分成 4 乘 4 块，差别最大的两块平均绝对差 1.293 与 1.127，其余块都不到 1。全图清晰度两者几乎相同（0.5634 与 0.5624），因为地面的深度变化平缓，两种规则在平缓区域给出的结果一致，分歧只在轮廓附近。
+普通高斯与圆盘收集的差集中在物体的轮廓上：把画面分成 4 乘 4 块，差别最大的两块平均绝对差 1.293 与 1.127，其余块都不到 1。
+全图清晰度两者几乎相同（0.5634 与 0.5624），因为地面的深度变化平缓，两种规则在平缓区域给出的结果一致，分歧只在轮廓附近。
 
 ### 采样数与噪声
 
-圆盘收集的采样点在抖动之后是随机分布的，采样数决定噪声水平。以 512 个采样为参考：
+圆盘收集的采样点是一组固定的螺旋点（[`shaders/dof.frag:54-59`](shaders/dof.frag#L54-L59)），采样数决定噪声水平。以 512 个采样为参考：
 
 | 采样数 | 平均绝对差 | 超过 8 的像素占比 | 最大差值 |
 | --- | --- | --- | --- |
@@ -155,7 +193,10 @@ $$
 
 ### 弥散圆半径上限
 
-真实相机在近景一侧的弥散圆可以非常大，屏幕空间却没有被前景挡住的那些背景颜色。把半径钳到一个上限，既能压住这种拉伸，也能控制在景深通道里要读多少个像素。实测默认光圈与小光圈下的差别：
+真实相机在近景一侧的弥散圆可以非常大，屏幕空间却没有被前景挡住的那些背景颜色。
+把半径钳到一个上限，既能压住这种拉伸，也能控制在景深通道里要读多少个像素（[`shaders/dof.frag:48-51`](shaders/dof.frag#L48-L51)）。
+上限作用在中心像素与每一个采样点上（[`shaders/dof.frag:96-97`](shaders/dof.frag#L96-L97)、
+[`shaders/dof.frag:128`](shaders/dof.frag#L128)）。实测默认光圈与小光圈下的差别：
 
 | 配置 | 平均拉普拉斯响应 |
 | --- | --- |
@@ -179,7 +220,13 @@ $$
 | 圆盘收集，256 个采样，f/1.2 | 1.311 | 0.012 | 1.300 |
 | 圆盘收集，256 个采样，f/1.2，半径上限 4 | 1.038 | 0.012 | 1.026 |
 
-景深通道的代价与采样数成正比（128 到 512 是四倍，0.637 到 2.517 也是四倍）。采样数相同时，光圈越大越贵：同样是 256 个采样，f/1.2 下半径更大，收集的区域更宽，1.300 比钳到 4 像素的 1.026 贵四分之一，多出来的部分是缓存局部性变差。
+三个时间戳分别写在场景通道开始（[`src/renderer.cpp:642-646`](src/renderer.cpp#L642-L646)）、场景通道结束
+（[`src/renderer.cpp:688-691`](src/renderer.cpp#L688-L691)）与整帧结束（
+[`src/renderer.cpp:761-764`](src/renderer.cpp#L761-L764)）三处，相邻两个之差就是两段设备时间
+（[`src/renderer.cpp:602-614`](src/renderer.cpp#L602-L614)）。
+
+景深通道的代价与采样数成正比（128 到 512 是四倍，0.637 到 2.517 也是四倍）。
+采样数相同时，光圈越大越贵：同样是 256 个采样，f/1.2 下半径更大，收集的区域更宽，1.300 比钳到 4 像素的 1.026 贵四分之一，多出来的部分是缓存局部性变差。
 
 ## 界面控件
 
@@ -252,7 +299,8 @@ build\meow_depth_of_field.exe --mode disk --blades 6 --fnumber 1.2 --samples 256
 build\meow_depth_of_field.exe --no-interface --control-port 21000 --core-clock 2880 --memory-clock 15001 --report intermediate\dof_measure.csv
 ```
 
-连上 21000 端口后，`mode`/`samples`/`blades`/`focal`/`fnumber`/`focus`/`max-radius`/`jitter`/`exposure`/`light`/`ambient` 改配置，`begin` 与 `end` 圈定一段测量，`quit` 退出。
+连上 21000 端口后，`mode`/`samples`/`blades`/`focal`/`fnumber`/`focus`/`max-radius`/
+`jitter`/`exposure`/`light`/`ambient` 改配置，`begin` 与 `end` 圈定一段测量，`quit` 退出。
 
 ## 源码结构
 

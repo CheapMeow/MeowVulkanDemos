@@ -4,18 +4,22 @@
 
 ## 简介
 
-背包模型加一盏方向光，屏幕左上角另有一条参考条：四个方块分别按线性值 0.5、0.35、0.18、0.05 绘制，只经过与画面相同的色调映射与输出编码，用来把抓帧得到的像素值与理论值直接对照。
+背包模型加一盏方向光（[`src/main.cpp:70`](src/main.cpp#L70)），屏幕左上角另有一条参考条：四个方块分别按线性值 0.5、0.35、0.18、0.05 绘制（
+[`src/scene_setup.cpp:5-10`](src/scene_setup.cpp#L5-L10)），只经过与画面相同的色调映射与输出编码（
+[`shaders/bar.frag:14-32`](shaders/bar.frag#L14-L32)），用来把抓帧得到的像素值与理论值直接对照。
 
 颜色空间相关的开关：
 
 | 控件 | 说明 |
 | --- | --- |
-| 反照率按 sRGB 解释 | 切换反照率贴图绑定的视图：打开时按 sRGB 解码，关闭时按线性使用 |
-| 法线按 sRGB 解释 | 切换法线贴图绑定的视图，打开时会引入光照方向错误 |
-| 输出做伽马编码 | 打开时把线性结果编码回 sRGB，关闭时线性直写 |
-| 色调映射 | 无、Reinhard、ACES 三种 |
+| 反照率按 sRGB 解释 | 切换反照率贴图绑定的视图（[`src/renderer.cpp:301`](src/renderer.cpp#L301)）：打开时按 sRGB 解码，关闭时按线性使用 |
+| 法线按 sRGB 解释 | 切换法线贴图绑定的视图（[`src/renderer.cpp:302`](src/renderer.cpp#L302)），打开时会引入光照方向错误 |
+| 输出做伽马编码 | 打开时把线性结果编码回 sRGB，关闭时线性直写（[`shaders/object.frag:40-47`](shaders/object.frag#L40-L47)） |
+| 色调映射 | 无、Reinhard、ACES 三种（[`shaders/object.frag:22-38`](shaders/object.frag#L22-L38)） |
 
-两张贴图的图像是同一份数据，线性与 sRGB 属于同一个格式兼容类，因此图像以可换格式创建，切换的只是绑上来的视图，不需要重新上传贴图。
+两张贴图的图像是同一份数据，线性与 sRGB 属于同一个格式兼容类，因此图像以可换格式创建（[`src/renderer.cpp:327-331`](src/renderer.cpp#L327-L331)），
+附加视图把同一张图像按另一种格式解释（[`../../common/src/vk_resources.cpp:248-252`](../../common/src/vk_resources.cpp#L248-L252)
+），切换的只是绑上来的视图，不需要重新上传贴图。
 
 ## 渲染流程
 
@@ -28,21 +32,41 @@ graph LR
     D --> F[交换链图像]
 ```
 
+物体与参考条共用同一个渲染通道、同一份顶点输入与管线布局，两条管线由同一个循环按种类分支创建，差别只在着色器与深度测试（
+[`src/renderer.cpp:229-275`](src/renderer.cpp#L229-L275)）。物体通道绑定物体管线与索引缓冲（
+[`src/renderer.cpp:521-526`](src/renderer.cpp#L521-L526)），参考条随后绑定另一条管线与另一套顶点缓冲（
+[`src/renderer.cpp:528-531`](src/renderer.cpp#L528-L531)）。物体的色调映射与输出编码在同一个片元调用的末尾完成（
+[`shaders/object.frag:83-84`](shaders/object.frag#L83-L84)），参考条在片元着色器里独立复现这两个步骤（
+[`shaders/bar.frag:18-30`](shaders/bar.frag#L18-L30)）。
+
 ## 实现要点
 
 ### 贴图的解释方式
 
-颜色类贴图按 sRGB 解码，数据类贴图按线性使用。反照率是颜色，按 sRGB 解码后参与光照；法线是数据，必须按线性使用。把反照率按线性解释，画面整体变亮，因为 sRGB 编码把暗部的数值抬高了；把法线按 sRGB 解释，法线的分量被重新分布，光照方向随之出错，明暗交界的位置会跑偏。
+颜色类贴图按 sRGB 解码，数据类贴图按线性使用。反照率是颜色，按 sRGB 解码后参与光照（[`shaders/object.frag:69`](shaders/object.frag#L69)
+）；法线是数据，必须按线性使用（[`shaders/object.frag:52`](shaders/object.frag#L52)
+）。绑定哪一个视图由配置决定（[`src/renderer.cpp:299-308`](src/renderer.cpp#L299-L308)
+），反照率的主视图按 sRGB、附加视图按线性，法线相反（[`src/renderer.cpp:327-331`](src/renderer.cpp#L327-L331)
+）。把反照率按线性解释，画面整体变亮，因为 sRGB 编码把暗部的数值抬高了；
+把法线按 sRGB 解释，法线的分量被重新分布，光照方向随之出错，明暗交界的位置会跑偏。
 
 ### 光照与输出
 
-光照与混合全程在线性空间进行，最后先做色调映射，再编码回 sRGB 写入一张线性格式的交换链图像。交换链选用 `B8G8R8A8_UNORM`，硬件不会再做一次编码，所以输出编码由着色器负责。
+光照与混合全程在线性空间进行（[`shaders/object.frag:76-81`](shaders/object.frag#L76-L81)），最后先做色调映射，再编码回 sRGB 写入一张线性格式的交换链图像（
+[`shaders/object.frag:83-84`](shaders/object.frag#L83-L84)）。交换链选用 `B8G8R8A8_UNORM`（
+[`../../common/src/vk_context.cpp:339-346`](../../common/src/vk_context.cpp#L339-L346)），颜色附件直接取交换链格式（
+[`src/renderer.cpp:16-24`](src/renderer.cpp#L16-L24)），硬件不会再做一次编码，所以输出编码由着色器负责。
 
-色调映射把高动态范围压回 [0,1]，输出编码把线性值映射到显示器的传递函数上。两者的顺序不能颠倒：先编码再色调映射会让高光区域被提前截断。
+色调映射把高动态范围压回 [0,1]（[`shaders/object.frag:22-38`](shaders/object.frag#L22-L38)），输出编码把线性值映射到显示器的传递函数上（
+[`shaders/object.frag:40-47`](shaders/object.frag#L40-L47)）。两者的顺序不能颠倒：先编码再色调映射会让高光区域被提前截断。
 
 ### 参考条
 
-参考条的顶点直接给出裁剪空间坐标，值放在纹理坐标里，不参与光照，只经过与画面相同的色调映射与输出编码。因此它的像素值可以与理论值逐项对照。
+参考条的顶点直接给出裁剪空间坐标，值放在纹理坐标里（[`shaders/bar.vert:9-13`](shaders/bar.vert#L9-L13)
+、[`src/scene_setup.cpp:29-33`](src/scene_setup.cpp#L29-L33)），不参与光照，只经过与画面相同的色调映射与输出编码（
+[`shaders/bar.frag:14-32`](shaders/bar.frag#L14-L32)）。它不测试也不写深度（
+[`src/renderer.cpp:251-254`](src/renderer.cpp#L251-L254)），顶点输入里去掉法线那一项（
+[`src/renderer.cpp:196-199`](src/renderer.cpp#L196-L199)）。因此它的像素值可以与理论值逐项对照。
 
 ## 界面控件
 
@@ -107,7 +131,8 @@ build\meow_srgb_linear.exe --auto-exit 4 --no-interface --capture intermediate\s
 adb -s <serial> forward tcp:21000 tcp:21000
 ```
 
-桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`albedo-srgb`/`normal-srgb`/`gamma-output` 取 0 或 1，`tonemap` 取名字，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
+桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`albedo-srgb`/`normal-srgb`/`gamma-output` 取 0 或 1，
+`tonemap` 取名字，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
 
 随时间变化的参数曲线与测量报告格式与间接绘制 case 一致，报告里的前几列是三项开关、色调映射与绘制命令条数。
 
@@ -129,7 +154,8 @@ adb -s <serial> forward tcp:21000 tcp:21000
 ## 安卓端差异
 
 - 实例与设备申请 Vulkan 1.1，着色器以 `--target-env=vulkan1.1` 编译，覆盖只支持 1.1 的设备；`minSdk` 24 是 Vulkan 1.0 的最低 API 等级。
-- 设备时间只在设备支持时间戳时测量：驱动的 `timestampComputeAndGraphics` 能力与图形队列族的 `timestampValidBits` 都满足才创建查询池并记录时间戳，不支持的设备上"设备时间"恒为零，主机侧各项计时照常。
+- 设备时间只在设备支持时间戳时测量：驱动的 `timestampComputeAndGraphics` 能力与图形队列族的 `timestampValidBits` 都满足才创建查询池并记录时间戳，
+  不支持的设备上"设备时间"恒为零，主机侧各项计时照常。
 - GPU 锁频面板不显示：它依赖桌面的 `nvidia-smi`。
 - 相机固定在初始化位置，没有键盘输入；触摸事件交给 ImGui 的安卓后端，面板上的滑块和按钮可以直接操作。
 - 帧率上限 60 FPS，避免无界空转发热。

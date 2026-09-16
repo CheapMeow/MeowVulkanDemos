@@ -4,14 +4,17 @@
 
 ## 简介
 
-一个由相互遮挡的板组成的高频场景，上面叠一层贴在近处物体上的薄雾与一片缓慢移动的柔和光斑。这一层
-按可调的比例在离屏渲染，再合成回全分辨率。
+一个由相互遮挡的板组成的高频场景：板绕竖直轴偏转，相邻的板之间既有深度台阶也有法线台阶
+（[`src/renderer.cpp:91-112`](src/renderer.cpp#L91-L112)、[`shaders/scene.vert:25-49`](shaders/scene.vert#L25-L49)）。
+上面叠一层贴在近处物体上的薄雾与一片缓慢移动的柔和光斑（[`shaders/glow.frag:31-49`](shaders/glow.frag#L31-L49)），
+这一层按可调的比例在离屏渲染（[`src/renderer.cpp:265-304`](src/renderer.cpp#L265-L304)），再合成回全分辨率
+（[`shaders/composite.frag:34-88`](shaders/composite.frag#L34-L88)）。
 
 | 控件 | 取值 | 说明 |
 | --- | --- | --- |
-| 比例 | 全分辨率、二分之一、四分之一 | 低分辨率层的分辨率 |
-| 上采样方式 | 双线性、深度法线加权 | 合成时的放大方式 |
-| 深度与法线的获取 | 拷贝为颜色附件、子通道内写出、从全分辨率重新取 | 低分辨率几何的来源 |
+| 比例 | 全分辨率、二分之一、四分之一 | 低分辨率层的分辨率，比例除数决定宽高（[`src/renderer.cpp:46-55`](src/renderer.cpp#L46-L55)） |
+| 上采样方式 | 双线性、深度法线加权 | 合成时的放大方式（[`shaders/composite.frag:41-43`](shaders/composite.frag#L41-L43)、[`shaders/composite.frag:45-83`](shaders/composite.frag#L45-L83)） |
+| 深度与法线的获取 | 拷贝为颜色附件、子通道内写出、从全分辨率重新取 | 低分辨率几何的来源（[`shaders/downgrade.frag:9-15`](shaders/downgrade.frag#L9-L15)、[`shaders/glow_geometry.frag:50-55`](shaders/glow_geometry.frag#L50-L55)、[`shaders/composite.frag:58-64`](shaders/composite.frag#L58-L64)） |
 
 ## 渲染流程
 
@@ -28,17 +31,26 @@ graph LR
     G --> H[交换链图像]
 ```
 
-场景通道输出全分辨率的高动态范围颜色、法线与深度。低分辨率层从全分辨率的深度还原视空间深度，按
-距离给出一层薄雾，再叠上缓慢移动的光斑。合成通道把低分辨率层放大到全分辨率，与场景颜色相加后做
-色调映射。
+场景通道输出全分辨率的高动态范围颜色、法线与深度（[`src/renderer.cpp:160-223`](src/renderer.cpp#L160-L223)）。
+低分辨率层从全分辨率的深度还原视空间深度（[`shaders/glow.frag:23-29`](shaders/glow.frag#L23-L29)），按距离给出
+一层薄雾，再叠上缓慢移动的光斑（[`shaders/glow.frag:33-49`](shaders/glow.frag#L33-L49)）。合成通道把低分辨率
+层放大到全分辨率，与场景颜色相加后做色调映射（[`shaders/composite.frag:85-87`](shaders/composite.frag#L85-L87)）。
+
+低分辨率几何有三条获取路径：单独一趟降采样写进低分辨率颜色附件
+（[`src/renderer.cpp:879-895`](src/renderer.cpp#L879-L895)），在光斑通道的第二个附件里写出
+（[`src/renderer.cpp:897-913`](src/renderer.cpp#L897-L913)），或者在合成时从全分辨率的深度与法线重新取
+（[`shaders/composite.frag:58-64`](shaders/composite.frag#L58-L64)）。比例变化时，低分辨率附件在本帧开头重建
+（[`src/renderer.cpp:731-746`](src/renderer.cpp#L731-L746)）。
 
 ## 实现要点
 
 ### 上采样方式的差别
 
-薄雾贴在近处物体上：物体的视空间深度在二到六之间，背景在远平面上，两者在物体的轮廓处形成台阶。
-低分辨率层在这个台阶两侧取值相差很大，直接双线性放大会把台阶糊开，轮廓上出现一圈串色。用全分辨率
-的深度与法线给低分辨率邻域加权之后，跨物体的邻域权重接近零。
+薄雾贴在近处物体上：物体的视空间深度在二到六之间，背景在远平面上，两者在物体的轮廓处形成台阶
+（[`src/renderer.cpp:102`](src/renderer.cpp#L102)、[`src/main.cpp:96-105`](src/main.cpp#L96-L105)）。低分辨率层在这个
+台阶两侧取值相差很大（[`shaders/glow.frag:36`](shaders/glow.frag#L36)），直接双线性放大会把台阶糊开，轮廓上
+出现一圈串色（[`shaders/composite.frag:41-43`](shaders/composite.frag#L41-L43)）。用全分辨率的深度与法线给低
+分辨率邻域加权之后，跨物体的邻域权重接近零（[`shaders/composite.frag:72-76`](shaders/composite.frag#L72-L76)）。
 
 以全分辨率的结果为基准，逐像素比较（同一时刻，动画冻结）：
 
@@ -59,12 +71,13 @@ graph LR
 
 | 获取方式 | 与全分辨率基准的平均绝对差 | 差值超过 32 的占比 | 最大差值 |
 | --- | --- | --- | --- |
-| 拷贝为颜色附件 | 0.717 | 0.524% | 101 |
-| 子通道内写出 | 0.717 | 0.524% | 101 |
-| 从全分辨率重新取 | 0.836 | 0.673% | 118 |
+| 拷贝为颜色附件（[`shaders/downgrade.frag:12-14`](shaders/downgrade.frag#L12-L14)） | 0.717 | 0.524% | 101 |
+| 子通道内写出（[`shaders/glow_geometry.frag:54`](shaders/glow_geometry.frag#L54)） | 0.717 | 0.524% | 101 |
+| 从全分辨率重新取（[`shaders/composite.frag:58-64`](shaders/composite.frag#L58-L64)） | 0.836 | 0.673% | 118 |
 
-前两种方式写出的低分辨率几何完全相同，逐像素差值为零；第三种方式把坐标对齐到低分辨率纹素中心之后
-再从全分辨率的深度与法线取值，取值与前两种一致，但经过一次额外的坐标对齐与采样，结果略有出入。
+前两种方式写出的低分辨率几何完全相同，逐像素差值为零；第三种方式把坐标换算到低分辨率纹素中心之后
+再从全分辨率的深度与法线取值（[`shaders/composite.frag:61-64`](shaders/composite.frag#L61-L64)），取值与前两种
+一致，但经过一次额外的坐标换算与采样，结果略有出入。
 
 ### 设备时间与工作量
 
@@ -79,11 +92,14 @@ graph LR
 | 四分之一 | 深度法线加权 | 子通道内写出 | 400 x 225 | 3 | 0.108 ± 0.013 ms |
 | 四分之一 | 深度法线加权 | 从全分辨率重新取 | 400 x 225 | 3 | 0.117 ± 0.013 ms |
 
-比例从全分辨率降到四分之一，设备时间从 0.141 降到 0.111 毫秒，省下的是低分辨率层的着色与带宽。
-上采样的开销与比例无关：四分之一比例下双线性只要 0.031 毫秒，换成五点乘五点的深度法线加权就涨到
-0.111 毫秒，多出来的 0.080 毫秒全在合成通道里，按全分辨率的像素数计费。获取方式的差别不大，
-拷贝方式比子通道方式多一条绘制命令，重新取方式把开销挪进合成通道的每个邻域采样里，所以在深度法线
-加权下三者的设备时间接近。
+比例从全分辨率降到四分之一，设备时间从 0.141 降到 0.111 毫秒，省下的是低分辨率层的着色与带宽
+（[`src/renderer.cpp:897-913`](src/renderer.cpp#L897-L913)）。上采样的开销与比例无关：四分之一比例下双线性
+只要 0.031 毫秒，换成五点乘五点的深度法线加权就涨到 0.111 毫秒
+（[`shaders/composite.frag:51-53`](shaders/composite.frag#L51-L53)），多出来的 0.080 毫秒全在合成通道里，按
+全分辨率的像素数计费（[`src/renderer.cpp:946-959`](src/renderer.cpp#L946-L959)）。获取方式的差别不大，拷贝
+方式比子通道方式多一条绘制命令（[`src/renderer.cpp:879-895`](src/renderer.cpp#L879-L895)），重新取方式把开销
+挪进合成通道的每个邻域采样里（[`shaders/composite.frag:58-64`](shaders/composite.frag#L58-L64)），所以在深度
+法线加权下三者的设备时间接近。
 
 ## 界面控件
 

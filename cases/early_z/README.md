@@ -4,20 +4,25 @@
 
 ## 简介
 
-一叠相互交叠的四边形沿视线方向一层层排开，其中一片是程序生成掩码的镂空植被。相机正对这一叠四边形，片元着色器里按界面上的"片元开销"做一段可以调长的循环，让着色开销大到足以看出 early-Z 省下了多少。
+一叠相互交叠的四边形沿视线方向一层层排开，0 号离相机最近，编号越大越远，位置略有偏移（[`src/renderer.cpp:24-31`](src/renderer.cpp#L24-L31)
+），其中 0 号是程序生成掩码的镂空植被（[`src/renderer.cpp:36-39`](src/renderer.cpp#L36-L39)），掩码由片元着色器现算，不引入贴图资源（
+[`shaders/quad_common.glsl:25-31`](shaders/quad_common.glsl#L25-L31)）。相机正对这一叠四边形（
+[`src/scene_setup.cpp:5-18`](src/scene_setup.cpp#L5-L18)），片元着色器里按界面上的"片元开销"做一段可以调长的循环（
+[`shaders/quad_common.glsl:33-46`](shaders/quad_common.glsl#L33-L46)），让着色开销大到足以看出 early-Z 省下了多少。
 
 界面上的开关：
 
 | 控件 | 作用 |
 | --- | --- |
-| 实例数量 | 参与绘制的四边形层数 |
-| 片元开销 | 片元着色器里循环的次数，放大着色开销 |
-| 绘制顺序 | 前到后、后到前、乱序三种提交顺序 |
-| 深度预通道 | 主通道之前先只写一遍深度 |
-| 插入永不成立的 discard | 在片元着色器里放一条永远不成立的 discard |
-| 镂空走 alpha test | 植被片的镂空掩码是否参与 alpha test |
+| 实例数量 | 参与绘制的四边形层数（[`src/renderer.cpp:480`](src/renderer.cpp#L480)） |
+| 片元开销 | 片元着色器里循环的次数，放大着色开销（[`shaders/quad_common.glsl:36-43`](shaders/quad_common.glsl#L36-L43)） |
+| 绘制顺序 | 前到后、后到前、乱序三种提交顺序（[`src/renderer.cpp:307-323`](src/renderer.cpp#L307-L323)） |
+| 深度预通道 | 主通道之前先只写一遍深度（[`src/renderer.cpp:535`](src/renderer.cpp#L535)、[`src/renderer.cpp:567`](src/renderer.cpp#L567)） |
+| 插入永不成立的 discard | 在片元着色器里放一条永远不成立的 discard（[`shaders/quad_common.glsl:54-59`](shaders/quad_common.glsl#L54-L59)） |
+| 镂空走 alpha test | 植被片的镂空掩码是否参与 alpha test（[`shaders/quad_common.glsl:60-64`](shaders/quad_common.glsl#L60-L64)） |
 
-绘制顺序不改变实例数据，只改写一份顺序缓冲：顶点着色器按 `gl_InstanceIndex` 从顺序缓冲取出实例编号，再取实例数据。
+绘制顺序不改变实例数据，只改写一份顺序缓冲：顶点着色器按 `gl_InstanceIndex` 从顺序缓冲取出实例编号，再取实例数据（
+[`shaders/quad.vert:16-19`](shaders/quad.vert#L16-L19)）。
 
 ## 渲染流程
 
@@ -29,17 +34,26 @@ graph LR
     C --> D[交换链图像]
 ```
 
-两个通道在同一个渲染通道内先后执行，深度附件在两者之间保留。有预通道时主通道用 `VK_COMPARE_OP_EQUAL` 判定并且不再写深度，没有预通道时用 `VK_COMPARE_OP_LESS` 并写入深度。
+预通道与主通道在同一个渲染通道内先后执行，中间不结束渲染通道，深度附件的存储操作设为保留（[`src/renderer.cpp:58-60`](src/renderer.cpp#L58-L60)
+）。有预通道时主通道用 `VK_COMPARE_OP_EQUAL` 判定并且不再写深度，没有预通道时用 `VK_COMPARE_OP_LESS` 并写入深度（
+[`src/renderer.cpp:257-267`](src/renderer.cpp#L257-L267)）。预通道的颜色写入掩码为零，只写深度（
+[`src/renderer.cpp:269-273`](src/renderer.cpp#L269-L273)）。
 
 ## 实现要点
 
 ### 顺序为什么影响耗时
 
-early-Z 在片元着色之前完成深度测试，被遮挡的片元直接跳过着色。前到后的顺序让每一层四边形先把近处的深度写进去，随后更远的层整片被拒绝，实际着色的片元数从"层数乘以面积"降到接近"一层的面积"。后到前的顺序恰好相反，每一层都被判定为更近，全部走完整着色。
+early-Z 在片元着色之前完成深度测试，被遮挡的片元直接跳过着色。前到后的顺序把顺序缓冲排成实例编号递增（
+[`src/renderer.cpp:309-310`](src/renderer.cpp#L309-L310)），离相机最近的层先绘制，
+近处的深度先写进去，随后更远的层整片被拒绝，实际着色的片元数从"层数乘以面积"降到接近"一层的面积"。后到前的顺序恰好相反，每一层都被判定为更近，全部走完整着色。
 
 ### discard 与 alpha test
 
-片元着色器里出现 `discard`、写出深度或 alpha test 时，图形处理器在着色前拿不到确定的深度，很多实现会退回到着色之后再测深度，early-Z 随之失效。把 alpha test 挪进深度预通道、主通道改用相等判定，可以让第二次着色重新拿到 early-Z：预通道只写深度，代价很低，主通道再做完整着色。
+片元着色器里出现 `discard`、写出深度或 alpha test 时，图形处理器在着色前拿不到确定的深度，很多实现会退回到着色之后再测深度，early-Z 随之失效：
+`applyDiscard` 的两个开关都取自 uniform 与插值量，编译期无法判定，着色器里始终存在 `discard` 语句（
+[`shaders/quad_common.glsl:48-65`](shaders/quad_common.glsl#L48-L65)）。把 alpha test 挪进深度预通道（
+[`shaders/prepass.frag:13-20`](shaders/prepass.frag#L13-L20)）、主通道改用相等判定（
+[`src/renderer.cpp:263-267`](src/renderer.cpp#L263-L267)），可以让第二次着色重新拿到 early-Z：预通道只写深度，代价很低，主通道再做完整着色。
 
 这条结论与硬件实现强相关。本 case 的实测（见下）在本机的 NVIDIA 显卡上只看到绘制顺序与预通道的影响，没有看到 discard 带来的差异。
 
@@ -101,7 +115,8 @@ build\meow_early_z.exe --auto-exit 5 --no-interface --fragment-cost 256 --report
 | 后到前 | 开 | 关 | 0.039 ms |
 | 前到后 | 开 | 开 | 0.035 ms |
 
-前到后比后到前快约 3.3 倍，乱序落在两者之间，与"前到后最省着色开销"一致。加预通道之后耗时降到 0.035 ms，而且后到前也降到 0.039 ms，顺序的影响几乎消失，说明预通道把被遮挡片元的着色成本提前挡掉了。插入 discard 前后没有可测差别，开关 alpha test 同样没有差别，这与硬件实现有关：本机的实现即便着色器里存在 discard，仍然在着色之前完成深度测试。
+前到后比后到前快约 3.3 倍，乱序落在两者之间，与"前到后最省着色开销"一致。加预通道之后耗时降到 0.035 ms，而且后到前也降到 0.039 ms，顺序的影响几乎消失，说明预通道把被遮挡片元的着色成本提前挡掉了。
+插入 discard 前后没有可测差别，开关 alpha test 同样没有差别，这与硬件实现有关：本机的实现即便着色器里存在 discard，仍然在着色之前完成深度测试。
 
 镂空掩码的可见效果可以抓帧对比：
 
@@ -118,7 +133,8 @@ build\meow_early_z.exe --auto-exit 4 --no-interface --fragment-cost 16 --capture
 adb -s <serial> forward tcp:21000 tcp:21000
 ```
 
-桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`instances`/`order`/`prepass`/`discard`/`alpha-test`/`fragment-cost` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
+桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`instances`/`order`/`prepass`/`discard`/`alpha-test`/
+`fragment-cost` 改配置，`begin` 与 `end` 圈定一段测量（`end` 返回一行与 CSV 同格式的数据），`quit` 退出。
 
 随时间变化的参数曲线与测量报告格式与间接绘制 case 一致，报告里的前几列是绘制顺序、预通道开关、discard 开关、alpha test 开关、片元开销与绘制命令条数。
 
@@ -142,7 +158,8 @@ adb -s <serial> forward tcp:21000 tcp:21000
 ## 安卓端差异
 
 - 实例与设备申请 Vulkan 1.1，着色器以 `--target-env=vulkan1.1` 编译，覆盖只支持 1.1 的设备；`minSdk` 24 是 Vulkan 1.0 的最低 API 等级。
-- 设备时间只在设备支持时间戳时测量：驱动的 `timestampComputeAndGraphics` 能力与图形队列族的 `timestampValidBits` 都满足才创建查询池并记录时间戳，不支持的设备上"设备时间"恒为零，主机侧各项计时照常。
+- 设备时间只在设备支持时间戳时测量：驱动的 `timestampComputeAndGraphics` 能力与图形队列族的 `timestampValidBits` 都满足才创建查询池并记录时间戳，
+  不支持的设备上"设备时间"恒为零，主机侧各项计时照常。
 - GPU 锁频面板不显示：它依赖桌面的 `nvidia-smi`。
 - 相机固定在初始化位置，没有键盘输入；触摸事件交给 ImGui 的安卓后端，面板上的滑块和按钮可以直接操作。
 - 帧率上限 60 FPS，避免无界空转发热。安卓上的分块架构对 early-Z 的处理与桌面不同，discard 与 alpha test 的影响需要在真机上重新测量。

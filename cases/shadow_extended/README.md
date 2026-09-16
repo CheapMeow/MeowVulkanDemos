@@ -4,7 +4,10 @@
 
 ## 简介
 
-在方向光阴影贴图的基础上扩展四项内容：级联、级间融合、遮挡物搜索（PCSS）与矩阴影（VSM），另外把阴影坐标的计算位置做成开关。场景与 shadow case 一致：地面上按网格摆放实例，另有一块棋盘格地面，相机的远平面拉到网格的十二倍，级联才有分段的必要。
+在方向光阴影贴图的基础上扩展四项内容：级联、级间融合、遮挡物搜索（PCSS）与矩阴影（VSM），
+另外把阴影坐标的计算位置做成开关。场景与 shadow case 一致：地面上按网格摆放实例，
+另有一块棋盘格地面（[`src/main.cpp:293-311`](src/main.cpp#L293-L311)），
+相机的远平面拉到网格的十二倍（[`src/main.cpp:334-343`](src/main.cpp#L334-L343)），级联才有分段的必要。
 
 | 控件 | 说明 |
 | --- | --- |
@@ -17,7 +20,13 @@
 | 坐标计算位置 | 片元里算，或者顶点里算完插值给片元 |
 | 视图 | 正常、级联着色、受光比例 |
 
-阴影贴图以颜色附件保存深度或矩，主通道手动比较。四级贴图作为一组写进绑定 5 的数组。
+阴影贴图以颜色附件保存深度或矩：深度模式写片元的窗口深度
+（[`shaders/shadow_depth.frag:1-9`](shaders/shadow_depth.frag#L1-L9)），矩模式写窗口深度的一阶与二阶矩
+（[`shaders/shadow_moments.frag:1-10`](shaders/shadow_moments.frag#L1-L10)），主通道逐纹素取值后在着色器里
+比较，采样器不做硬件比较，滤波必须是最近邻，否则相邻纹素的值会被平均掉
+（[`src/renderer.cpp:28-44`](src/renderer.cpp#L28-L44)、
+[`shaders/shadow_sampling.glsl:86-88`](shaders/shadow_sampling.glsl#L86-L88)）。
+四级贴图作为一组写进绑定 5 的数组（[`src/renderer.cpp:586-604`](src/renderer.cpp#L586-L604)）。
 
 ## 渲染流程
 
@@ -33,29 +42,65 @@ graph LR
     F --> G[交换链图像]
 ```
 
-阴影通道按级数逐级绘制，每级一个渲染通道实例与一次绘制命令，因此绘制命令条数随级数线性增长。
+阴影通道按级数逐级绘制，每级一个渲染通道实例与一次绘制命令，因此绘制命令条数随级数线性增长：
+循环的边界取当前级数，每级重新开始一次渲染通道，并把级编号用推送常量送进顶点着色器
+（[`src/renderer.cpp:855-894`](src/renderer.cpp#L855-L894)、[`shaders/shadow.vert:8-20`](shaders/shadow.vert#L8-L20)）。
+主通道用同一个顶点着色器画物体与地面，两份片元着色器分别调用阴影采样
+（[`src/renderer.cpp:929-942`](src/renderer.cpp#L929-L942)、[`shaders/scene.frag:40-63`](shaders/scene.frag#L40-L63)、
+[`shaders/ground.frag:16-37`](shaders/ground.frag#L16-L37)）。
 
 ## 实现要点
 
 ### 级联的划分与拟合
 
-视锥按距离切成若干段，划分采用对数划分与均匀划分各占一半的做法，近处分段密、远处分段疏。每一级用包围球拟合：取这一段视锥沿视线方向的中点作为球心，球半径覆盖这一段视锥的横截面，正交视锥按球半径开，这样拟合结果与光源方向无关，光源转动时级联范围不会跳动。
+视锥按距离切成若干段，划分采用对数划分与均匀划分各占一半的做法，近处分段密、远处分段疏
+（[`src/main.cpp:61-72`](src/main.cpp#L61-L72)）。每一级用包围球拟合：
+取这一段视锥沿视线方向的中点作为球心，球半径覆盖这一段视锥的横截面，正交视锥按球半径开
+（[`src/main.cpp:74-96`](src/main.cpp#L74-L96)），这样拟合结果与光源方向无关，光源转动时级联范围不会跳动。
 
 ### 级间融合
 
-相邻两级的纹素密度不同，分界处会出现宽度突变。融合在分界附近同时取相邻两级，按落点在分界区间内的位置插值，接缝随之消失。
+相邻两级的纹素密度不同，分界处会出现宽度突变。融合在分界附近同时取相邻两级，按落点在分界区间内的位置插值
+（[`shaders/shadow_sampling.glsl:140-150`](shaders/shadow_sampling.glsl#L140-L150)），接缝随之消失。
+分界区间的起点取本级远平面的百分之八十五处
+（[`shaders/shadow_sampling.glsl:144`](shaders/shadow_sampling.glsl#L144)），选中的是最后一级时没有下一级可取，不做融合
+（[`shaders/shadow_sampling.glsl:141`](shaders/shadow_sampling.glsl#L141)）。
 
 ### 遮挡物搜索
 
-PCSS 先在较大范围内找出被遮挡的纹素，按平均遮挡深度估计半影大小，再用这个半径做 PCF。物体与地面接触处遮挡物很近，半影小、边界硬；遮挡物离接收面远时半影大、边界柔和，两者之间的过渡由搜索半径与半影系数控制。
+PCSS 先在较大范围内找出被遮挡的纹素，取这些纹素存储深度的平均值当作平均遮挡深度
+（[`shaders/shadow_sampling.glsl:91-108`](shaders/shadow_sampling.glsl#L91-L108)），
+按平均遮挡深度估计半影大小，再用这个半径做 PCF
+（[`shaders/shadow_sampling.glsl:109-120`](shaders/shadow_sampling.glsl#L109-L120)）。
+物体与地面接触处遮挡物很近，半影小、边界硬；遮挡物离接收面远时半影大、边界柔和，
+两者之间的过渡由搜索半径与半影系数控制
+（[`shaders/shadow_sampling.glsl:90`](shaders/shadow_sampling.glsl#L90)、
+[`shaders/shadow_sampling.glsl:109`](shaders/shadow_sampling.glsl#L109)）。
 
 ### 矩与切比雪夫
 
-矩模式把深度的平均值与平方的平均值存进两通道贴图，采样时用切比雪夫不等式估算参考深度被遮挡的概率。估算式在遮挡物与接收面很接近时会给出偏小的概率，表现为漏光。
+矩模式把深度的平均值与平方的平均值存进两通道贴图
+（[`shaders/shadow_moments.frag:1-10`](shaders/shadow_moments.frag#L1-L10)），采样时先把周围三乘三的矩取平均
+当作预滤波（[`shaders/shadow_sampling.glsl:21-40`](shaders/shadow_sampling.glsl#L21-L40)），
+再用切比雪夫上界估算受光比例：
+
+$$
+V = \frac{\sigma^2}{\sigma^2 + \delta^2}, \qquad \delta = ref - \mu, \qquad \sigma^2 = \max(m_2 - \mu^2,\ 10^{-6})
+$$
+
+$\mu$ 与 $m_2$ 是两个通道存的一阶矩与二阶矩，$ref$ 是当前片元的参考深度，`ref` 不高于 $\mu$ 时判定为完全
+受光（[`shaders/shadow_sampling.glsl:42-51`](shaders/shadow_sampling.glsl#L42-L51)）。遮挡物与接收面很接近
+时这个上界把受光比例估得偏高，表现为漏光。
 
 ### 坐标的计算位置
 
-坐标在片元里算时，每个片元用世界位置与光源矩阵直接投影；放在顶点里算则会先算出顶点的光源空间位置，再按屏幕重心插值给片元。透视除法之后的位置沿三角形是线性的，小三角形上两种做法几乎没有差别，大三角形或跨越级联边界时插值结果会偏离。
+坐标在片元里算时，每个片元用世界位置与光源矩阵直接投影
+（[`shaders/scene_common.glsl:43-56`](shaders/scene_common.glsl#L43-L56)）；放在顶点里算则会先算出顶点的光源
+裁剪空间位置（[`shaders/scene.vert:13-26`](shaders/scene.vert#L13-L26)），再按屏幕重心插值给片元，
+第 0 级直接用这个插值结果，其余级仍按世界位置投影
+（[`shaders/shadow_sampling.glsl:55-67`](shaders/shadow_sampling.glsl#L55-L67)）。
+透视除法之后的位置沿三角形是线性的，小三角形上两种做法几乎没有差别，
+大三角形或跨越级联边界时插值结果会偏离。
 
 ## 界面控件
 
@@ -123,7 +168,9 @@ build\meow_shadow_extended.exe --auto-exit 4 --no-interface --instances 1500 --v
 | 2 | 4 |
 | 4 | 6 |
 
-条数是每一级的两次阴影绘制加主通道的两次。坐标计算位置这一项在本场景里看不出差别：这里的三角形都很小，透视除法之后的位置沿三角形接近线性，插值结果与逐片元计算一致；网格换成大三角形或跨越级联边界时才会出现偏离。
+条数是每一级的两次阴影绘制加主通道的两次。坐标计算位置这一项在本场景里看不出差别：
+这里的三角形都很小，透视除法之后的位置沿三角形接近线性，插值结果与逐片元计算一致；
+网格换成大三角形或跨越级联边界时才会出现偏离。
 
 参数可以在同一次运行里改变：
 
@@ -131,7 +178,9 @@ build\meow_shadow_extended.exe --auto-exit 4 --no-interface --instances 1500 --v
 adb -s <serial> forward tcp:21000 tcp:21000
 ```
 
-桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`cascades`/`shadow-size`/`value-mode`/`coord-mode`/`view`/`blocker-radius`/`penumbra`/`shadows`/`pcf`/`cascade-blend` 等改配置，`begin` 与 `end` 圈定一段测量，`quit` 退出。
+桌面端用 `--control-port 21000` 启动后，连接并逐行发命令：`cascades`/`shadow-size`/`value-mode`/`coord-mode`/
+`view`/`blocker-radius`/`penumbra`/`shadows`/`pcf`/`cascade-blend` 等改配置，
+`begin` 与 `end` 圈定一段测量，`quit` 退出。
 
 ## 源码结构
 

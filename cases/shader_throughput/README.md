@@ -4,14 +4,23 @@
 
 ## 简介
 
-一个全屏的计算着色器，按界面参数在几组内核之间切换，结果写进存储缓冲，再由一个显示通道画到屏幕上，
-保证计算不会被编译器优化掉。
+一个全屏的计算着色器，每个线程负责一个像素，线程组固定为八乘八
+（[`shaders/throughput_common.glsl:4`](shaders/throughput_common.glsl#L4)），按界面参数在几组内核之间切换，
+结果写进一块存储缓冲（[`shaders/throughput_common.glsl:14-16`](shaders/throughput_common.glsl#L14-L16)），
+每个线程在自己的像素位置写一个浮点数（[`shaders/throughput_common.glsl:89`](shaders/throughput_common.glsl#L89)），
+再由一个显示通道把它按灰度画到屏幕上（[`shaders/display.frag:19-22`](shaders/display.frag#L19-L22)），
+整条链路保证计算不会被编译器优化掉。
 
 | 内核 | 内容 |
 | --- | --- |
-| 算力密集 | 一串有数据依赖的正弦、余弦与小数取余，迭代次数可调 |
-| 采样密集 | 在同一张纹理上取样，采样次数与采样局部性可调 |
-| 分支 | 两条各自算力密集的分支，切换按像素发散还是按线程组一致 |
+| 算力密集 | 一串有数据依赖的正弦、余弦与小数取余，迭代次数可调（[`shaders/throughput_common.glsl:31-39`](shaders/throughput_common.glsl#L31-L39)） |
+| 采样密集 | 在同一张纹理上取样，采样次数与采样局部性可调（[`shaders/throughput_common.glsl:41-58`](shaders/throughput_common.glsl#L41-L58)） |
+| 分支 | 两条各自算力密集的分支，切换按像素发散还是按线程组一致（[`shaders/throughput_common.glsl:79-86`](shaders/throughput_common.glsl#L79-L86)） |
+
+三个内核共用同一个入口，按 `kernelParams.x` 里的内核编号分派
+（[`shaders/throughput_common.glsl:73-87`](shaders/throughput_common.glsl#L73-L87)）。采样用的纹理在启动时
+按棋盘与噪声叠加生成，带足高频细节（[`src/renderer.cpp:30-45`](src/renderer.cpp#L30-L45)），采样器用线性
+过滤与重复寻址（[`src/renderer.cpp:312-320`](src/renderer.cpp#L312-L320)）。
 
 ## 渲染流程
 
@@ -22,13 +31,21 @@ graph LR
     C --> D[交换链图像]
 ```
 
-计算内核按每八乘八一个线程组派发，每个线程负责一个像素。显示通道把结果缓冲按灰度画出来。
+计算内核按每八乘八一个线程组派发，每个线程负责一个像素：派发尺寸把结果缓冲的宽高各加七之后除以八
+（[`src/renderer.cpp:469-471`](src/renderer.cpp#L469-L471)），越界的线程在入口处直接返回
+（[`shaders/throughput_common.glsl:63-66`](shaders/throughput_common.glsl#L63-L66)）。显示通道是一个全屏
+三角形（[`shaders/fullscreen.vert:6-11`](shaders/fullscreen.vert#L6-L11)），把结果缓冲里的值按灰度取出来
+（[`shaders/display.frag:17-22`](shaders/display.frag#L17-L22)）。两个通道之间隔一条内存屏障，把计算着色器
+的写转换成片元着色器的读（[`src/renderer.cpp:476-481`](src/renderer.cpp#L476-L481)）。
 
 ## 实现要点
 
 ### 四组对比
 
-锁频 2880/15001 之后按段测量，屏幕分辨率 1600 乘 900，每帧两万两千六百个线程组：
+锁频 2880/15001 之后按段测量，屏幕分辨率 1600 乘 900，每帧两万两千六百个线程组
+（[`src/renderer.cpp:469-472`](src/renderer.cpp#L469-L472)）。设备时间取命令缓冲首尾两次时间戳查询的差值
+（[`src/renderer.cpp:453-456`](src/renderer.cpp#L453-L456)、
+[`src/renderer.cpp:555-557`](src/renderer.cpp#L555-L557)）：
 
 | 内核 | 迭代次数 | 采样次数 | 分支发散 | 采样局部性 | 设备时间 |
 | --- | --- | --- | --- | --- | --- |
@@ -43,24 +60,39 @@ graph LR
 | 采样密集 | | 16 | | 差 | 0.050 ± 0.012 ms |
 
 算力密集内核的设备时间随迭代次数线性上升，从八次到一百二十八次是 0.021、0.049、0.160 毫秒，每帧的
-固定开销约为 0.010 毫秒，斜率约为每次迭代 1.1 微秒。采样密集内核从四次到十六次是 0.022、0.035 毫秒，
-斜率约为每次采样 1.1 微秒，与一次迭代的算术成本同量级。
+固定开销约为 0.010 毫秒，斜率约为每次迭代 1.1 微秒，迭代次数决定内层循环绕几圈，每一圈里先做一次正弦
+与余弦、再取一次小数（[`shaders/throughput_common.glsl:34-37`](shaders/throughput_common.glsl#L34-L37)）。
+采样密集内核从四次到十六次是 0.022、0.035 毫秒，斜率约为每次采样 1.1 微秒，与一次迭代的算术成本同量级，
+采样次数决定纹理取样循环的圈数（[`shaders/throughput_common.glsl:44-56`](shaders/throughput_common.glsl#L44-L56)）。
 
 ### 分支发散
 
 同一个分支内核，把发散开关切换之后是 0.051 与 0.089 毫秒，比值 1.75。发散时同一个线程组里相邻线程
-走不同的分支，两条分支都要执行再按掩码过滤；不发散时整组一起走同一条，只执行一条分支。1.75 而不是
-2，是因为两条分支的迭代次数差一。
+走不同的分支，两条分支都要执行再按掩码过滤；不发散时整组一起走同一条，只执行一条分支。两条分支的
+迭代次数差一（[`shaders/throughput_common.glsl:86`](shaders/throughput_common.glsl#L86)），所以比值落在
+2 以下。
+
+发散开关决定取哪个判定式：打开时按像素坐标的奇偶取
+（[`shaders/throughput_common.glsl:81-83`](shaders/throughput_common.glsl#L81-L83)），关闭时按线程组编号
+的奇偶取（[`shaders/throughput_common.glsl:84`](shaders/throughput_common.glsl#L84)）。
 
 ### 采样局部性
 
 同样是十六次采样，规整坐标是 0.035 毫秒，把坐标换成纹理上的随机位置之后是 0.050 毫秒，慢了百分之四十三。
-采样次数相同、总字节数相同，差别只在相邻线程访问的纹素距离，命中的缓存层级不同。
+采样次数相同、总字节数相同，差别只在相邻线程访问的纹素距离，命中的缓存层级不同。规整坐标是在像素
+坐标上叠一个随采样序号增长的固定偏移，相邻线程落在邻近纹素上
+（[`shaders/throughput_common.glsl:51-54`](shaders/throughput_common.glsl#L51-L54)）；随机坐标先用哈希把
+像素坐标打散成 [0,1] 区间上的一点，相邻线程之间不再有位置关系
+（[`shaders/throughput_common.glsl:23-28`](shaders/throughput_common.glsl#L23-L28)、
+[`shaders/throughput_common.glsl:47-50`](shaders/throughput_common.glsl#L47-L50)）。
 
 ### 精度限定符
 
 中精度与高精度都是 0.050 毫秒，桌面显卡把两者都编译成 32 位浮点。这一档的真正差别要在支持 16 位浮点
-的安卓设备上才能量到，受限类型的判断需要厂商工具配合。
+的安卓设备上才能量到，受限类型的判断需要厂商工具配合。两个版本各自声明默认精度之后再包含同一份内核
+主体（[`shaders/throughput.comp:4`](shaders/throughput.comp#L4)、
+[`shaders/throughput_half.comp:6`](shaders/throughput_half.comp#L6)），每帧按界面选择绑定对应的计算管线
+（[`src/renderer.cpp:465-467`](src/renderer.cpp#L465-L467)）。
 
 ## 界面控件
 
